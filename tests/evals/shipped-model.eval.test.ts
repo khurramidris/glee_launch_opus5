@@ -190,7 +190,8 @@ const cases: EvalCase[] = [
     participantNames: ["Pooja", "Lara"],
     participantDirectory: { pooja: "Pooja", lara: "Lara" },
     expectedTerms: ["map", "lara"],
-    requiredTerms: ["map", "lara"],
+    // "She'd carry it" is a correct answer, so only the attribution is required.
+    requiredTerms: ["lara"],
     forbiddenTerms: ["compass"],
   },
 ];

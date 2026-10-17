@@ -693,6 +693,18 @@ function containsUserChoiceOverwrite(
   return missingProtectedAnchor && novelTokens.length >= 2;
 }
 
+// Recounting what another participant already said ("Lara said she'd carry
+// it") is not speaking for them, unlike scripting them ("Lara says, ...").
+function withoutReportedSpeech(reply: string, namePattern: string): string {
+  return reply.replace(
+    new RegExp(
+      `\\b${namePattern}\\b\\s+(?:said|told\\s+\\w+|mentioned|promised|offered|volunteered|agreed|answered|replied|asked)\\s+(?:that|she|he|they|it|to|if|whether|earlier|before|already|so)\\b`,
+      "gi",
+    ),
+    " ",
+  );
+}
+
 function containsOtherParticipantImpersonation(
   reply: string,
   prepared?: PreparedResponseRequest,
@@ -755,7 +767,7 @@ function containsOtherParticipantImpersonation(
         "i",
       ).test(reply) ||
       new RegExp(`\\b${pattern}\\b\\s+${otherActionVerbs}\\b`, "i").test(
-        reply,
+        withoutReportedSpeech(reply, pattern),
       ) ||
       new RegExp(
         `\\b${pattern}\\b(?:\\s+and\\s+[A-Z][A-Za-z]+(?:\\s+[A-Z][A-Za-z]+)?)?\\s+${otherAgencyVerbs}\\b`,

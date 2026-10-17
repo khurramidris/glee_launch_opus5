@@ -1653,6 +1653,37 @@ describe("evaluateCharacterReply", () => {
     expect(result.fatal).toBe(true);
   });
 
+  it("allows recounting what another participant already said", () => {
+    const prepared = {
+      ...preparedForGroupNonEngagement,
+      context: {
+        ...preparedForGroupNonEngagement.context,
+        participantNames: ["Pooja", "Lara"],
+      },
+    };
+    for (const reply of [
+      "Lara said she'd carry it herself.",
+      "Lara mentioned that she would bring the map.",
+      "Lara volunteered to carry the map.",
+    ]) {
+      const result = evaluateCharacterReply({
+        reply,
+        speakerName: "Pooja",
+        latestUserMessage: "Pooja, what did Lara volunteer to bring?",
+        prepared,
+      });
+      expect(result.reasons, reply).not.toContain("other_participant_impersonation");
+    }
+
+    const scripted = evaluateCharacterReply({
+      reply: 'Lara says, "I will carry the map."',
+      speakerName: "Pooja",
+      latestUserMessage: "Pooja, what did Lara volunteer to bring?",
+      prepared,
+    });
+    expect(scripted.reasons).toContain("other_participant_impersonation");
+  });
+
   it("flags required downstream group replies that ignore the current social beat", () => {
     const result = evaluateCharacterReply({
       reply: '"The naan here is good."',
