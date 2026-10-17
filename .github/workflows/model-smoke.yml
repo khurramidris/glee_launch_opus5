@@ -26,11 +26,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            eval: "--eval"
+            eval: ""
           - os: windows-latest
             eval: ""
+          # The eval sends Glee's real prompts through the model; the macOS
+          # runner is the fastest CPU GitHub offers.
           - os: macos-latest
-            eval: ""
+            eval: "--eval"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
