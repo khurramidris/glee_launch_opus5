@@ -1,0 +1,85 @@
+name: Pin AI resources
+
+on:
+  push:
+    branches: [ci/pin-resources]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    name: Resolve and hash model files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: List Hugging Face repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          for repo in prism-ml/Ternary-Bonsai-2-4B-gguf CompendiumLabs/bge-small-en-v1.5-gguf; do
+            info=$(curl -sfL "https://huggingface.co/api/models/$repo")
+            rev=$(jq -r .sha <<<"$info")
+            license=$(jq -r '(.cardData.license // "") + " " + ([.tags[]? | select(startswith("license:"))] | join(","))' <<<"$info")
+            base=$(jq -r '(.cardData.base_model // "") | tostring' <<<"$info")
+            files=$(curl -sfL "https://huggingface.co/api/models/$repo/tree/$rev" | jq -r '[.[] | select(.type=="file") | "\(.path) size=\(.size) sha256=\(.lfs.oid // "-")"] | join("%0A")')
+            echo "::notice title=$repo::revision=$rev%0Alicense=$license%0Abase=$base%0A$files"
+          done
+      - name: Download and hash the chat and embedding models
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p models && cd models
+          rev=$(curl -sfL https://huggingface.co/api/models/prism-ml/Ternary-Bonsai-2-4B-gguf | jq -r .sha)
+          name=$(curl -sfL "https://huggingface.co/api/models/prism-ml/Ternary-Bonsai-2-4B-gguf/tree/$rev" | jq -r '[.[] | select(.type=="file") | .path | select(test("Q2_0\\.gguf$")) | select(test("mmproj") | not)][0]')
+          echo "chat file: $name"
+          curl -sfL -o chat.gguf "https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/$rev/$name"
+          curl -sfL -o embed.gguf "https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/d32f8c040ea3b516330eeb75b72bcc2d3a780ab7/bge-small-en-v1.5-q4_k_m.gguf"
+          echo "::notice title=downloaded hashes::chat $name revision=$rev size=$(stat -c %s chat.gguf) sha256=$(sha256sum chat.gguf | cut -d' ' -f1)%0Aembed size=$(stat -c %s embed.gguf) sha256=$(sha256sum embed.gguf | cut -d' ' -f1)"
+          echo "CHAT_NAME=$name" >> "$GITHUB_ENV"
+      - name: Fetch PrismML llama.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=prism-b10777-e3de715
+          curl -sfL -o llama.tar.gz "https://github.com/PrismML-Eng/llama.cpp/releases/download/$tag/llama-$tag-bin-ubuntu-x64.tar.gz"
+          echo "3f97b6fbec0065fede2be92f05df531c1050636fc2613e1ba0d975249df19713  llama.tar.gz" | sha256sum -c -
+          mkdir -p llama && tar -xzf llama.tar.gz -C llama
+          echo "LLAMA=$PWD/llama/llama-$tag/llama-server" >> "$GITHUB_ENV"
+      - name: Chat smoke test with Glee launch flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          key=$(openssl rand -hex 24); echo -n "$key" > key.txt
+          "$LLAMA" -m models/chat.gguf --host 127.0.0.1 --port 18080 --api-key-file key.txt --no-webui --no-slots \
+            --ctx-size 8192 --parallel 1 --jinja --reasoning-budget 0 --chat-template-kwargs '{"enable_thinking":false}' \
+            --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 1.5 --repeat-penalty 1.0 --cache-ram 512 -ngl 0 \
+            > server.log 2>&1 &
+          for i in $(seq 1 120); do curl -sf http://127.0.0.1:18080/health >/dev/null && break; sleep 1; done
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/v1/models)
+          echo "unauthenticated /v1/models -> $code"
+          body='{"messages":[{"role":"system","content":"You are Nova, a warm, perceptive companion. Stay in character and reply in two or three sentences."},{"role":"user","content":"I had a rough day at work. Can you cheer me up?"}],"max_tokens":200,"stream":false}'
+          for run in 1 2; do
+            resp=$(curl -sf -H "X-Api-Key: $key" -H 'Content-Type: application/json' -d "$body" http://127.0.0.1:18080/v1/chat/completions)
+            text=$(jq -r '.choices[0].message.content' <<<"$resp" | head -c 900 | tr '\n' ' ')
+            reasoning=$(jq -r '.choices[0].message.reasoning_content // ""' <<<"$resp" | head -c 200 | tr '\n' ' ')
+            timings=$(jq -c '.timings | {prompt_n, prompt_per_second, predicted_n, predicted_per_second}' <<<"$resp")
+            echo "::notice title=chat run $run::unauth=$code%0Areply=$text%0Areasoning=$reasoning%0Atimings=$timings"
+          done
+          stream=$(curl -sN -H "X-Api-Key: $key" -H 'Content-Type: application/json' -d "${body/\"stream\":false/\"stream\":true}" http://127.0.0.1:18080/v1/chat/completions | head -c 600 | tr '\n' ' ')
+          echo "::notice title=stream sample::$stream"
+          grep -iE 'model type|n_ctx|n_layer|arch|chat template|failed|error' server.log | head -c 3000 | tr '\n' '|' | sed 's/^/::notice title=server log::/' ; echo
+      - name: Embedding smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$LLAMA" -m models/embed.gguf --host 127.0.0.1 --port 18081 --embeddings --pooling cls -ngl 0 --no-webui > embed.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:18081/health >/dev/null && break; sleep 1; done
+          dims=$(curl -sf -H 'Content-Type: application/json' -d '{"input":"hello world"}' http://127.0.0.1:18081/v1/embeddings | jq '.data[0].embedding | length')
+          echo "::notice title=embedding::dimensions=$dims"
+      - name: Report failure context
+        if: failure()
+        shell: bash
+        run: |
+          for f in server.log embed.log; do [ -f "$f" ] && echo "::error title=$f tail::$(tail -c 3000 "$f" | tr '\n' '|')"; done; true
