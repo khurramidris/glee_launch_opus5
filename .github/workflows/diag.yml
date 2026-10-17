@@ -1,0 +1,23 @@
+name: Diag
+on:
+  push:
+    branches: [ci/diag]
+permissions:
+  contents: read
+jobs:
+  metal:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download
+        run: |
+          set -e
+          mkdir -p w && cd w
+          curl -fsSL -o rt.tgz https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10777-e3de715/llama-prism-b10777-e3de715-bin-macos-arm64.tar.gz
+          tar -xzf rt.tgz
+          curl -fsSL -o pq2.gguf https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/8d6557168168f91ea6697a4a49ed2ef622b53adb/Ternary-Bonsai-2-4B-PQ2_0.gguf
+          curl -fsSL -o q2.gguf https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/8d6557168168f91ea6697a4a49ed2ef622b53adb/Ternary-Bonsai-2-4B-Q2_0.gguf
+          sysctl -n machdep.cpu.brand_string; sw_vers
+      - name: Probe
+        run: node diag/diag.mjs "$PWD/w/llama-prism-b10777-e3de715/llama-server" "$PWD/w/pq2.gguf" "$PWD/w/q2.gguf"
