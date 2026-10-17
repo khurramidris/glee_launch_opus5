@@ -1,0 +1,41 @@
+# Dependencies and build output
+node_modules
+dist
+dist-ssr
+src-tauri/target
+src-tauri/gen
+.artifacts/
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Local AI files (downloaded by the app at runtime, never committed)
+*.gguf
+mirror-out/
+
+# Local data
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.cer
+*.mobileprovision
+
+# Editors and OS files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.sw?

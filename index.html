@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <title>Glee</title>
+    <script>
+      (() => {
+        const supportedThemes = new Set(["glee", "sunshine", "white", "black", "purple"]);
+        let theme = "glee";
+        try {
+          const savedTheme = localStorage.getItem("glee.ui.theme");
+          if (supportedThemes.has(savedTheme)) theme = savedTheme;
+        } catch {
+          // Keep the default theme when WebView storage is unavailable.
+        }
+        document.documentElement.dataset.theme = theme;
+        if (/Mac/i.test(navigator.userAgent)) document.documentElement.dataset.platform = "macos";
+        document.documentElement.style.colorScheme = theme === "black" ? "dark" : "light";
+      })();
+    </script>
+    <style>
+      :root {
+        color: #2f2418;
+        font-family: "Avenir Next", "Manrope", "Segoe UI", sans-serif;
+      }
+
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: transparent;
+      }
+
+      body {
+        overflow: hidden;
+        background: transparent;
+      }
+
+      .boot-shell {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        box-sizing: border-box;
+        overflow: hidden;
+        border: 1px solid rgba(99, 79, 43, 0.14);
+        border-radius: 12px;
+        background:
+          radial-gradient(circle at 12% 0, rgba(255, 201, 60, 0.22) 0, transparent 28%),
+          radial-gradient(circle at 88% 8%, rgba(226, 244, 232, 0.18) 0, transparent 24%),
+          linear-gradient(180deg, #f8f0e1 0, #f4e9d7 100%);
+        background-clip: padding-box;
+        z-index: 9999;
+        transition: opacity 180ms ease, visibility 180ms ease;
+      }
+
+      .boot-shell.boot-hidden {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+
+      .boot-stage {
+        display: grid;
+        place-items: center;
+      }
+
+      .boot-card {
+        display: grid;
+        gap: 18px;
+        justify-items: center;
+        width: min(420px, calc(100vw - 64px));
+        padding: 30px 28px 26px;
+        border-radius: 30px;
+        border: 1px solid rgba(255, 255, 255, 0.42);
+        background: linear-gradient(180deg, rgba(255, 252, 244, 0.92) 0, rgba(253, 246, 232, 0.84) 100%);
+        box-shadow: 0 26px 64px rgba(120, 82, 16, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.78);
+      }
+
+      .boot-mark {
+        width: 88px;
+        height: 88px;
+        border-radius: 28px;
+        box-shadow: 0 18px 44px rgba(140, 87, 8, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.36);
+        overflow: hidden;
+      }
+
+      .boot-mark img {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      .boot-copy {
+        text-align: center;
+      }
+
+      .boot-copy strong {
+        display: block;
+        font-size: 34px;
+        letter-spacing: 0.02em;
+      }
+
+      .boot-copy span {
+        display: block;
+        margin-top: 8px;
+        font-size: 13px;
+        font-weight: 700;
+        color: rgba(66, 48, 22, 0.72);
+      }
+
+      .boot-progress {
+        --boot-progress: 12%;
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255, 247, 226, 0.94);
+        border: 1px solid rgba(210, 177, 111, 0.34);
+        overflow: hidden;
+      }
+
+      .boot-progress span {
+        display: block;
+        width: var(--boot-progress);
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #efbf56 0, #d48d13 100%);
+        box-shadow: 0 0 18px rgba(212, 141, 19, 0.28);
+        transition: width 180ms ease;
+      }
+
+      .boot-status {
+        display: block;
+        margin-top: -4px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        color: rgba(91, 66, 30, 0.72);
+      }
+
+      .boot-cancel {
+        border: 0;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 800;
+        color: #5f3c00;
+        background: rgba(255, 225, 139, 0.62);
+        box-shadow: inset 0 0 0 1px rgba(196, 139, 19, 0.18);
+        cursor: pointer;
+      }
+
+      .boot-cancel:hover:not(:disabled) {
+        background: rgba(255, 219, 112, 0.78);
+      }
+
+      .boot-cancel:disabled {
+        cursor: default;
+        opacity: 0.58;
+      }
+
+      .boot-cancel[hidden] {
+        display: none;
+      }
+
+      .boot-detail {
+        display: block;
+        min-height: 16px;
+        margin-top: -6px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        color: rgba(91, 66, 30, 0.6);
+      }
+
+      .boot-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+      }
+
+      .boot-retry {
+        color: #211a12;
+        background: #ffc124;
+        box-shadow: none;
+      }
+
+      .boot-retry:hover:not(:disabled) {
+        background: #ffcf52;
+      }
+
+      .boot-shell[data-state="error"] .boot-progress span {
+        background: #a83b3b;
+      }
+
+      .boot-shell[data-state="error"] .boot-status {
+        color: #8b2f2f;
+        max-width: 360px;
+        line-height: 1.45;
+      }
+
+      html[data-theme="white"] {
+        color: #1b1d22;
+      }
+
+      html[data-theme="sunshine"] {
+        color: #1e1b16;
+      }
+
+      html[data-theme="sunshine"] .boot-shell {
+        border-color: rgba(30, 27, 22, 0.14);
+        background: linear-gradient(180deg, #fffdf7 0, #f5f2eb 100%);
+      }
+
+      html[data-theme="sunshine"] .boot-card {
+        border-color: rgba(30, 27, 22, 0.1);
+        background: linear-gradient(180deg, #fff 0, #fffdf7 100%);
+        box-shadow: 0 26px 64px rgba(87, 68, 20, 0.14);
+      }
+
+      html[data-theme="sunshine"] .boot-copy span,
+      html[data-theme="sunshine"] .boot-status {
+        color: #6b655b;
+      }
+
+      html[data-theme="sunshine"] .boot-progress {
+        border-color: #e5ded0;
+        background: #f3efe7;
+      }
+
+      html[data-theme="sunshine"] .boot-progress span {
+        background: linear-gradient(90deg, #ffdf63 0, #ffd21f 100%);
+        box-shadow: 0 0 18px rgba(229, 169, 0, 0.22);
+      }
+
+      html[data-theme="white"] .boot-shell {
+        border-color: rgba(20, 22, 27, 0.14);
+        background: linear-gradient(180deg, #fbfbfc 0, #f0f1f3 100%);
+      }
+
+      html[data-theme="white"] .boot-card {
+        border-color: rgba(20, 22, 27, 0.1);
+        background: linear-gradient(180deg, #fff 0, #f7f8f9 100%);
+        box-shadow: 0 26px 64px rgba(20, 22, 27, 0.12);
+      }
+
+      html[data-theme="white"] .boot-copy span,
+      html[data-theme="white"] .boot-status {
+        color: #60646d;
+      }
+
+      html[data-theme="white"] .boot-progress {
+        border-color: #d8dbe0;
+        background: #eef0f2;
+      }
+
+      html[data-theme="white"] .boot-progress span {
+        background: linear-gradient(90deg, #35383e 0, #111214 100%);
+        box-shadow: none;
+      }
+
+      html[data-theme="black"] {
+        color: #ececef;
+      }
+
+      html[data-theme="black"] .boot-shell {
+        border-color: rgba(255, 255, 255, 0.14);
+        background: linear-gradient(180deg, #090a0d 0, #101218 100%);
+      }
+
+      html[data-theme="black"] .boot-card {
+        border-color: rgba(255, 255, 255, 0.1);
+        background: linear-gradient(180deg, #17191e 0, #111318 100%);
+        box-shadow: 0 26px 64px rgba(0, 0, 0, 0.42);
+      }
+
+      html[data-theme="black"] .boot-copy span,
+      html[data-theme="black"] .boot-status {
+        color: #a9adb5;
+      }
+
+      html[data-theme="black"] .boot-progress {
+        border-color: rgba(255, 255, 255, 0.12);
+        background: #24272e;
+      }
+
+      html[data-theme="black"] .boot-progress span {
+        background: linear-gradient(90deg, #f4d16c 0, #d7a92b 100%);
+      }
+
+      html[data-theme="purple"] {
+        color: #2c1d3a;
+      }
+
+      html[data-theme="purple"] .boot-shell {
+        border-color: rgba(111, 55, 170, 0.18);
+        background:
+          radial-gradient(circle at 12% 0, rgba(160, 108, 235, 0.18) 0, transparent 28%),
+          linear-gradient(180deg, #f8f5fc 0, #eee7f7 100%);
+      }
+
+      html[data-theme="purple"] .boot-card {
+        border-color: rgba(111, 55, 170, 0.14);
+        background: linear-gradient(180deg, #fff 0, #f3ecfb 100%);
+        box-shadow: 0 26px 64px rgba(76, 35, 117, 0.18);
+      }
+
+      html[data-theme="purple"] .boot-copy span,
+      html[data-theme="purple"] .boot-status {
+        color: #6d587c;
+      }
+
+      html[data-theme="purple"] .boot-progress {
+        border-color: #d8c5eb;
+        background: #ebe0f6;
+      }
+
+      html[data-theme="purple"] .boot-progress span {
+        background: linear-gradient(90deg, #a56be4 0, #7133b5 100%);
+        box-shadow: 0 0 18px rgba(113, 51, 181, 0.22);
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="glee-boot-overlay" class="boot-shell">
+      <main class="boot-stage">
+        <div class="boot-card">
+          <div class="boot-mark"><img src="/glee-icon-white-on-yellow-192.png" alt="" /></div>
+          <div class="boot-copy">
+            <strong>Glee</strong>
+            <span id="glee-boot-subtitle">Preparing your local character workspace</span>
+          </div>
+          <div
+            id="glee-boot-progress"
+            class="boot-progress"
+            role="progressbar"
+            aria-label="Loading Glee"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="12"
+          ><span></span></div>
+          <span id="glee-boot-status" class="boot-status" role="status" aria-live="polite">Opening local workspace...</span>
+          <span id="glee-boot-detail" class="boot-detail"></span>
+          <div class="boot-actions">
+            <button id="glee-boot-retry" class="boot-cancel boot-retry" type="button" hidden>Try again</button>
+            <button id="glee-boot-continue" class="boot-cancel" type="button" hidden>Continue without AI</button>
+            <button id="glee-boot-cancel" class="boot-cancel" type="button" hidden>Cancel setup</button>
+          </div>
+        </div>
+      </main>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

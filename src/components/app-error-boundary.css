@@ -1,0 +1,58 @@
+.app-error-boundary {
+  align-items: center;
+  background:
+    radial-gradient(circle at top left, rgb(255 224 102 / 28%), transparent 38%),
+    #f8f0e1;
+  box-sizing: border-box;
+  color: #201a15;
+  display: flex;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 32px;
+}
+
+.app-error-card {
+  background: rgb(255 253 248 / 94%);
+  border: 1px solid rgb(72 56 43 / 18%);
+  border-radius: 24px;
+  box-shadow: 0 22px 70px rgb(56 42 28 / 16%);
+  max-width: 560px;
+  padding: 40px;
+}
+
+.app-error-kicker {
+  color: #806c00;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.app-error-card h1 {
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  line-height: 1.08;
+  margin: 14px 0 16px;
+}
+
+.app-error-card p {
+  color: #65584c;
+  line-height: 1.65;
+  margin: 0 0 24px;
+}
+
+.app-error-card button {
+  background: #f4d800;
+  border: 1px solid #c8b000;
+  border-radius: 999px;
+  color: #201a15;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 12px 20px;
+}
+
+.app-error-card button:focus-visible {
+  outline: 3px solid rgb(45 91 230 / 45%);
+  outline-offset: 3px;
+}

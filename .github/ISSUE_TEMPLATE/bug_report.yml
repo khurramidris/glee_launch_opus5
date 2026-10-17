@@ -1,0 +1,95 @@
+name: Bug report
+description: Report a reproducible problem in the latest Glee public beta.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Glee. Search existing issues first. For an unpatched security issue, stop and use the private process in SECURITY.md.
+
+  - type: input
+    id: glee-version
+    attributes:
+      label: Glee version
+      description: Find this in Settings or Diagnostics & Recovery.
+      placeholder: 0.1.0-beta.1
+    validations:
+      required: true
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2 x64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation source
+      options:
+        - Official signed installer
+        - Locally built Glee UAT
+        - Source development build
+        - Other or unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime mode
+      options:
+        - CPU
+        - Vulkan
+        - Automatic or unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include the exact visible error and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start from...
+        2. Click...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: lifecycle
+    attributes:
+      label: Installation state
+      options:
+        - Clean first install
+        - Upgrade
+        - Reinstall with existing data
+        - Existing development profile
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics (optional)
+      description: Review every attachment. Do not post chats, databases, prompts, credentials, personal paths, or another person's data.
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed this report and its attachments and removed private conversations, credentials, personal paths, and third-party data.
+          required: true
+        - label: This is not a report of an unpatched security vulnerability.
+          required: true

@@ -1,0 +1,136 @@
+{
+  "name": "Glee visual identity tokens",
+  "version": "1.0.0-rc.1",
+  "status": "review",
+  "description": "Canonical visual tokens for Glee product, release, repository, and campaign surfaces.",
+  "color": {
+    "sun": {
+      "value": "#FFC124",
+      "type": "color",
+      "description": "Primary Glee yellow. Use for brand recognition, selected states, and confident calls to action."
+    },
+    "sunSoft": {
+      "value": "#FFE79A",
+      "type": "color",
+      "description": "Soft highlight and selected-surface tint."
+    },
+    "sunDeep": {
+      "value": "#9B6200",
+      "type": "color",
+      "description": "Accessible yellow-family foreground for links and small text on light surfaces."
+    },
+    "ink": {
+      "value": "#211A12",
+      "type": "color",
+      "description": "Primary warm-black text and icon color."
+    },
+    "inkSoft": {
+      "value": "#5B4A3A",
+      "type": "color",
+      "description": "Secondary text on light surfaces."
+    },
+    "cream": {
+      "value": "#FFF9EF",
+      "type": "color",
+      "description": "Primary warm surface."
+    },
+    "canvas": {
+      "value": "#F4EBDD",
+      "type": "color",
+      "description": "Application and campaign background."
+    },
+    "paper": {
+      "value": "#FFFEFA",
+      "type": "color",
+      "description": "Highest-elevation light surface."
+    },
+    "line": {
+      "value": "#DED2C1",
+      "type": "color",
+      "description": "Warm neutral border and divider."
+    },
+    "mint": {
+      "value": "#17734A",
+      "type": "color",
+      "description": "Privacy, local readiness, and success signal."
+    },
+    "coral": {
+      "value": "#A83B3B",
+      "type": "color",
+      "description": "Destructive action and error signal."
+    },
+    "plum": {
+      "value": "#66507F",
+      "type": "color",
+      "description": "Sparing story-world accent for editorial and character-led material."
+    },
+    "night": {
+      "value": "#101319",
+      "type": "color",
+      "description": "Dark expression background."
+    },
+    "white": {
+      "value": "#FFFFFF",
+      "type": "color",
+      "description": "Reverse foreground and neutral highlight."
+    }
+  },
+  "typography": {
+    "family": {
+      "sans": "Manrope, Avenir Next, Segoe UI Variable, Segoe UI, sans-serif",
+      "story": "Fraunces, Iowan Old Style, Palatino Linotype, Georgia, serif",
+      "mono": "JetBrains Mono, Cascadia Mono, Consolas, monospace"
+    },
+    "weight": {
+      "regular": 400,
+      "medium": 550,
+      "semibold": 650,
+      "bold": 750
+    },
+    "size": {
+      "caption": "0.75rem",
+      "small": "0.875rem",
+      "body": "1rem",
+      "lead": "1.25rem",
+      "heading3": "1.5rem",
+      "heading2": "2rem",
+      "heading1": "2.75rem",
+      "display": "clamp(3.5rem, 9vw, 7.5rem)"
+    }
+  },
+  "space": {
+    "1": "0.25rem",
+    "2": "0.5rem",
+    "3": "0.75rem",
+    "4": "1rem",
+    "5": "1.5rem",
+    "6": "2rem",
+    "7": "3rem",
+    "8": "4.5rem",
+    "9": "7rem"
+  },
+  "radius": {
+    "small": "0.625rem",
+    "control": "0.875rem",
+    "card": "1.25rem",
+    "panel": "1.75rem",
+    "round": "999px"
+  },
+  "stroke": {
+    "interfaceIcon": "1.8px",
+    "hairline": "1px",
+    "focus": "3px"
+  },
+  "shadow": {
+    "small": "0 8px 24px rgba(63, 43, 18, 0.08)",
+    "medium": "0 18px 48px rgba(63, 43, 18, 0.12)",
+    "night": "0 22px 64px rgba(0, 0, 0, 0.32)"
+  },
+  "motion": {
+    "fast": "140ms",
+    "base": "220ms",
+    "expressive": "340ms",
+    "easeStandard": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+    "easeExpressive": "cubic-bezier(0.22, 1, 0.36, 1)"
+  }
+}
