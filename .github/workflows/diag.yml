@@ -1,0 +1,46 @@
+name: Diag CPU
+on:
+  push:
+    branches: [ci/diag-cpu]
+permissions:
+  contents: read
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rt: llama-prism-b10777-e3de715-bin-ubuntu-x64.tar.gz
+          - os: windows-latest
+            rt: llama-prism-b10777-e3de715-bin-win-cpu-x64.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download
+        run: |
+          set -e
+          mkdir -p w && cd w
+          curl -fsSL -o rt "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10777-e3de715/${{ matrix.rt }}"
+          if [[ "${{ matrix.rt }}" == *.zip ]]; then unzip -q rt -d eng; else mkdir eng && tar -xzf rt -C eng --strip-components=1; fi
+          base=https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/8d6557168168f91ea6697a4a49ed2ef622b53adb
+          for f in Q2_0 PQ2_0 PTQ1_0; do curl -fsSL -o $f.gguf "$base/Ternary-Bonsai-2-4B-$f.gguf" || echo "::warning::missing $f"; done
+          ls -la . eng | head -60
+      - name: CPU info
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then info="$(nproc) cpus; $(grep -m1 'model name' /proc/cpuinfo); flags: $(grep -m1 flags /proc/cpuinfo | tr ' ' '\n' | grep -E 'avx|vnni|f16c|fma' | tr '\n' ' ')"; else info="$(powershell -NoProfile -Command '(Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List | Out-String)' | tr '\r\n' '  ')"; fi
+          echo "::notice title=cpu::$info"
+          cd w/eng && ./llama-bench --help 2>&1 | head -3 || true
+      - name: Bench
+        run: |
+          cd w/eng
+          for f in Q2_0 PQ2_0 PTQ1_0; do
+            [ -f ../$f.gguf ] || continue
+            out=$(./llama-bench -m ../$f.gguf -p 256 -n 32 -r 2 -fa 0,1 -o md 2>&1 | grep -E '^\|' | tr '\n' '~' | sed 's/~/%0A/g')
+            echo "::notice title=$f::$out"
+          done
+          out=$(./llama-bench -m ../PQ2_0.gguf -p 256 -n 32 -r 1 -t 2,4 -o md 2>&1 | grep -E '^\|' | sed 's/$/%0A/' | tr -d '\n')
+          echo "::notice title=PQ2_0 threads::$out"
