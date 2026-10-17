@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Glee",
+  "version": "0.1.0",
+  "identifier": "com.glee.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Glee",
+        "width": 1240,
+        "height": 780,
+        "minWidth": 880,
+        "minHeight": 620,
+        "center": true,
+        "decorations": false,
+        "visible": true,
+        "backgroundColor": "#F8F0E1"
+      }
+    ],
+    "security": {
+      "assetProtocol": {
+        "enable": false
+      },
+      "csp": "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "dmg", "app"],
+    "publisher": "The Glee Contributors",
+    "copyright": "Copyright (c) The Glee Contributors",
+    "category": "Entertainment",
+    "shortDescription": "Private AI character chat that runs on your computer",
+    "longDescription": "Glee lets you create, import, and chat with AI characters. The AI model runs entirely on your computer, so your conversations stay private.",
+    "licenseFile": "../LICENSE",
+    "resources": {
+      "resources/licenses/": "legal/third-party/",
+      "../LICENSE": "legal/LICENSE",
+      "../PRIVACY.md": "legal/PRIVACY.md",
+      "../THIRD_PARTY_NOTICES.md": "legal/THIRD_PARTY_NOTICES.md"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "signingIdentity": "-"
+    }
+  }
+}

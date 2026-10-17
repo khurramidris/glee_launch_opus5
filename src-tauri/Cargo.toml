@@ -1,0 +1,53 @@
+[package]
+name = "glee-desktop"
+version = "0.1.0"
+description = "Private, offline AI character chat for the desktop"
+authors = ["The Glee Contributors"]
+edition = "2021"
+license = "MIT"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "glee_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "glee-desktop"
+path = "src/main.rs"
+test = false
+bench = false
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2.7.1"
+tauri-plugin-http = "~2.7.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["backup", "bundled", "load_extension"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["fs", "net", "process", "sync", "time"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde", "clock"] }
+thiserror = "2"
+base64 = "0.22"
+crc32fast = "1"
+sysinfo = "0.33"
+sqlite-vec = "0.1.9"
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
+flate2 = "1.1"
+tar = "0.4.44"
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }

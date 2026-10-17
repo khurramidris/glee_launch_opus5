@@ -1,0 +1,16 @@
+name: Feature idea
+description: Suggest something that would make Glee better.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: Describe what you're trying to do and what's getting in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How could Glee help? Mockups and examples are welcome.

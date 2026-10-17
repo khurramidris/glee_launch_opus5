@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "mirrors": [],
+  "models": [
+    {
+      "id": "ternary-bonsai-2-4b-pq2_0",
+      "role": "chat",
+      "displayName": "Ternary Bonsai 2 4B",
+      "license": "Apache-2.0",
+      "fileName": "Ternary-Bonsai-2-4B-PQ2_0.gguf",
+      "sizeBytes": 1146465120,
+      "sha256": "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409",
+      "url": "https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/8d6557168168f91ea6697a4a49ed2ef622b53adb/Ternary-Bonsai-2-4B-PQ2_0.gguf"
+    },
+    {
+      "id": "bge-small-en-v1.5-q4_k_m",
+      "role": "embedding",
+      "displayName": "BGE Small EN v1.5",
+      "license": "MIT",
+      "fileName": "bge-small-en-v1.5-q4_k_m.gguf",
+      "sizeBytes": 24808576,
+      "sha256": "363a0a4855dff6c653e06efe3209157debcf7f74e52d0d7c71e2747cd523043e",
+      "url": "https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/d32f8c040ea3b516330eeb75b72bcc2d3a780ab7/bge-small-en-v1.5-q4_k_m.gguf"
+    }
+  ],
+  "runtimes": [
+    {
+      "id": "windows-x64-cpu",
+      "platform": "windows-x64",
+      "backend": "cpu",
+      "version": "prism-b10777-e3de715",
+      "archive": "zip",
+      "entrypoint": "llama-server.exe",
+      "fileName": "llama-prism-b10777-e3de715-bin-win-cpu-x64.zip",
+      "sizeBytes": 19530958,
+      "sha256": "cff7eeff19163e6263720618cf98023715b8dac14d0873f5be0918765de323c4",
+      "url": "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10777-e3de715/llama-prism-b10777-e3de715-bin-win-cpu-x64.zip"
+    },
+    {
+      "id": "windows-x64-vulkan",
+      "platform": "windows-x64",
+      "backend": "vulkan",
+      "optional": true,
+      "version": "prism-b10777-e3de715",
+      "archive": "zip",
+      "entrypoint": "llama-server.exe",
+      "fileName": "llama-prism-b10777-e3de715-bin-win-vulkan-x64.zip",
+      "sizeBytes": 31298865,
+      "sha256": "6bf30d60dd35ae1129ae221593d79bed053c775c6ce8554f75cfe171f3028f10",
+      "url": "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10777-e3de715/llama-prism-b10777-e3de715-bin-win-vulkan-x64.zip"
+    },
+    {
+      "id": "macos-arm64-metal",
+      "platform": "macos-arm64",
+      "backend": "metal",
+      "version": "prism-b10777-e3de715",
+      "archive": "tar.gz",
+      "entrypoint": "llama-prism-b10777-e3de715/llama-server",
+      "fileName": "llama-prism-b10777-e3de715-bin-macos-arm64.tar.gz",
+      "sizeBytes": 11567567,
+      "sha256": "bd22ade1ece9dbcd7140a171044a50d5de37c1eb6d020ab83f61c86dfc0323a8",
+      "url": "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10777-e3de715/llama-prism-b10777-e3de715-bin-macos-arm64.tar.gz"
+    },
+    {
+      "id": "macos-x64-cpu",
+      "platform": "macos-x64",
+      "backend": "cpu",
+      "version": "prism-b10777-e3de715",
+      "archive": "tar.gz",
+      "entrypoint": "llama-prism-b10777-e3de715/llama-server",
+      "fileName": "llama-prism-b10777-e3de715-bin-macos-x64.tar.gz",
+      "sizeBytes": 11609754,
+      "sha256": "cf53102e491e0db5cf1d4678777b46b75774b02cacc3018d04bf1597cbd0ad56",
+      "url": "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10777-e3de715/llama-prism-b10777-e3de715-bin-macos-x64.tar.gz"
+    },
+    {
+      "id": "linux-x64-cpu",
+      "platform": "linux-x64",
+      "backend": "cpu",
+      "version": "prism-b10777-e3de715",
+      "archive": "tar.gz",
+      "entrypoint": "llama-prism-b10777-e3de715/llama-server",
+      "fileName": "llama-prism-b10777-e3de715-bin-ubuntu-x64.tar.gz",
+      "sizeBytes": 17882710,
+      "sha256": "3f97b6fbec0065fede2be92f05df531c1050636fc2613e1ba0d975249df19713",
+      "url": "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10777-e3de715/llama-prism-b10777-e3de715-bin-ubuntu-x64.tar.gz"
+    }
+  ]
+}

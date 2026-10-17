@@ -1,0 +1,92 @@
+:root {
+  /* Brand color */
+  --glee-color-sun: #ffc124;
+  --glee-color-sun-soft: #ffe79a;
+  --glee-color-sun-deep: #9b6200;
+  --glee-color-ink: #211a12;
+  --glee-color-ink-soft: #5b4a3a;
+  --glee-color-cream: #fff9ef;
+  --glee-color-canvas: #f4ebdd;
+  --glee-color-paper: #fffefa;
+  --glee-color-line: #ded2c1;
+  --glee-color-mint: #17734a;
+  --glee-color-coral: #a83b3b;
+  --glee-color-plum: #66507f;
+  --glee-color-night: #101319;
+  --glee-color-white: #ffffff;
+
+  /* Semantic aliases */
+  --glee-color-brand: var(--glee-color-sun);
+  --glee-color-text: var(--glee-color-ink);
+  --glee-color-text-soft: var(--glee-color-ink-soft);
+  --glee-color-background: var(--glee-color-canvas);
+  --glee-color-surface: var(--glee-color-cream);
+  --glee-color-surface-raised: var(--glee-color-paper);
+  --glee-color-border: var(--glee-color-line);
+  --glee-color-focus: var(--glee-color-sun-deep);
+  --glee-color-success: var(--glee-color-mint);
+  --glee-color-danger: var(--glee-color-coral);
+
+  /* Typography */
+  --glee-font-sans: "Manrope", "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif;
+  --glee-font-story: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --glee-font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --glee-font-weight-regular: 400;
+  --glee-font-weight-medium: 550;
+  --glee-font-weight-semibold: 650;
+  --glee-font-weight-bold: 750;
+  --glee-text-caption: 0.75rem;
+  --glee-text-small: 0.875rem;
+  --glee-text-body: 1rem;
+  --glee-text-lead: 1.25rem;
+  --glee-text-heading-3: 1.5rem;
+  --glee-text-heading-2: 2rem;
+  --glee-text-heading-1: 2.75rem;
+  --glee-text-display: clamp(3.5rem, 9vw, 7.5rem);
+
+  /* Layout */
+  --glee-space-1: 0.25rem;
+  --glee-space-2: 0.5rem;
+  --glee-space-3: 0.75rem;
+  --glee-space-4: 1rem;
+  --glee-space-5: 1.5rem;
+  --glee-space-6: 2rem;
+  --glee-space-7: 3rem;
+  --glee-space-8: 4.5rem;
+  --glee-space-9: 7rem;
+  --glee-radius-small: 0.625rem;
+  --glee-radius-control: 0.875rem;
+  --glee-radius-card: 1.25rem;
+  --glee-radius-panel: 1.75rem;
+  --glee-radius-round: 999px;
+  --glee-icon-stroke: 1.8px;
+  --glee-focus-width: 3px;
+
+  /* Depth and motion */
+  --glee-shadow-small: 0 8px 24px rgba(63, 43, 18, 0.08);
+  --glee-shadow-medium: 0 18px 48px rgba(63, 43, 18, 0.12);
+  --glee-shadow-night: 0 22px 64px rgba(0, 0, 0, 0.32);
+  --glee-motion-fast: 140ms;
+  --glee-motion-base: 220ms;
+  --glee-motion-expressive: 340ms;
+  --glee-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --glee-ease-expressive: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-glee-brand-surface="night"] {
+  --glee-color-text: #ffffff;
+  --glee-color-text-soft: #d8d2ca;
+  --glee-color-background: #101319;
+  --glee-color-surface: #171b22;
+  --glee-color-surface-raised: #1d222b;
+  --glee-color-border: #353b46;
+  --glee-color-focus: #ffc124;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --glee-motion-fast: 0ms;
+    --glee-motion-base: 0ms;
+    --glee-motion-expressive: 0ms;
+  }
+}

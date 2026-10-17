@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in Glee doesn't work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please search existing issues first. For security problems, use the private process in SECURITY.md instead.
+  - type: input
+    id: version
+    attributes:
+      label: Glee version
+      description: Shown in Settings → Diagnostics.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (built from source)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Optional. Paste relevant parts of the diagnostics summary (Settings → Diagnostics → Export diagnostics). Do not paste private chats.

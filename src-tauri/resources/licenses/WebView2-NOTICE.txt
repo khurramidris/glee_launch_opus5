@@ -1,0 +1,13 @@
+Microsoft Edge WebView2 Runtime
+
+Glee's Windows offline installer embeds Microsoft's redistributable Evergreen
+Standalone Installer through Tauri's `offlineInstaller` bundle mode. The
+WebView2 Runtime is installed and serviced separately by Microsoft.
+
+Distribution documentation and current terms:
+https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
+https://developer.microsoft.com/microsoft-edge/webview2/
+
+Microsoft, Microsoft Edge, WebView2, and Windows are trademarks of the
+Microsoft group of companies. Glee is not affiliated with or endorsed by
+Microsoft.

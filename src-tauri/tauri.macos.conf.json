@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Glee",
+        "width": 1240,
+        "height": 780,
+        "minWidth": 880,
+        "minHeight": 620,
+        "center": true,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "visible": true,
+        "backgroundColor": "#F8F0E1"
+      }
+    ]
+  }
+}
