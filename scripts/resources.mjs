@@ -176,6 +176,18 @@ function answerLooksRight(answer) {
   return first === "4" || first === "four" || text.includes("= 4") || text.includes("is 4");
 }
 
+function reportEvalCases(reportFile) {
+  if (!existsSync(reportFile)) return;
+  for (const item of JSON.parse(readFileSync(reportFile, "utf8")).cases ?? []) {
+    notice(`eval ${item.id}`, [
+      `pass=${item.mechanicalPass} accepted=${item.accepted} repaired=${item.repaired} score=${item.qualityScore} ${item.latencyMs}ms, ~${item.estimatedInputTokens} input tokens`,
+      `reasons: ${(item.reasons ?? []).join("; ") || "none"}`,
+      `raw: ${JSON.stringify((item.rawOutput ?? "").slice(0, 400))}`,
+      `final: ${JSON.stringify((item.finalOutput ?? "").slice(0, 400))}`,
+    ].join("\n"));
+  }
+}
+
 async function smoke({ runEval }) {
   const manifest = readManifest();
   const platform = currentPlatform();
@@ -266,11 +278,16 @@ async function smoke({ runEval }) {
     notice("smoke passed", `${platform}: chat, streaming (${deltas} chunks), auth, and ${dimensions}-d embeddings OK`);
 
     if (runEval) {
-      await run(process.platform === "win32" ? "pnpm.cmd" : "pnpm", ["exec", "vitest", "run", "--config", "vitest.eval.config.ts"], {
-        cwd: root,
-        shell: process.platform === "win32",
-        env: { ...process.env, GLEE_MODEL_EVAL_ENDPOINT: `http://127.0.0.1:${port}`, GLEE_MODEL_EVAL_API_KEY: key },
-      });
+      const reportFile = path.join(work, "eval-report.json");
+      try {
+        await run(process.platform === "win32" ? "pnpm.cmd" : "pnpm", ["exec", "vitest", "run", "--config", "vitest.eval.config.ts"], {
+          cwd: root,
+          shell: process.platform === "win32",
+          env: { ...process.env, GLEE_MODEL_EVAL_ENDPOINT: `http://127.0.0.1:${port}`, GLEE_MODEL_EVAL_API_KEY: key, GLEE_MODEL_EVAL_REPORT: reportFile },
+        });
+      } finally {
+        reportEvalCases(reportFile);
+      }
       notice("eval passed", "Glee's prompt pipeline produced accepted replies from the shipped model");
     }
   } finally {

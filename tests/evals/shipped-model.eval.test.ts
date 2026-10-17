@@ -321,15 +321,6 @@ describe.skipIf(!endpoint)("shipped model response evaluation", () => {
           usage: initial.usage,
           mechanicalPass,
         });
-        if (process.env.GITHUB_ACTIONS) {
-          const summary = [
-            `pass=${mechanicalPass} accepted=${evaluation.accepted} repaired=${evaluation.repaired} score=${evaluation.qualityScore} ${Date.now() - startedAt}ms`,
-            `reasons: ${evaluation.reasons.join("; ") || "none"}`,
-            `raw: ${JSON.stringify(initial.content.slice(0, 400))}`,
-            `final: ${JSON.stringify(evaluation.finalReply.slice(0, 400))}`,
-          ].join("%0A");
-          console.log(`::notice title=eval ${evalCase.id}::${summary}`);
-        }
 
         expect(initial.content.trim()).not.toBe("");
         expect(forbiddenLeak).toBe(false);
