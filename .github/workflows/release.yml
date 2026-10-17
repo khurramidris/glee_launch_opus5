@@ -1,10 +1,13 @@
 name: Release
 
-# Push a tag such as v0.1.0 to build the Windows installer and the macOS disk
-# image and attach them to a draft GitHub release for review.
+# Builds the Windows installer and the macOS disk image and attaches them to a
+# draft GitHub release named after the app version. Start it from the Actions
+# tab (Release -> Run workflow) or by pushing a tag such as v0.1.0. Publishing
+# the draft creates the version tag if it doesn't exist yet.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,11 +21,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Tag matches the app version
+      - name: Versions match (and the tag, if any)
         run: |
           version=$(node -p "require('./package.json').version")
           node scripts/verify-release-version.mjs
-          test "${GITHUB_REF_NAME}" = "v${version}" || { echo "::error::Tag ${GITHUB_REF_NAME} does not match version v${version}"; exit 1; }
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            test "${GITHUB_REF_NAME}" = "v${version}" || { echo "::error::Tag ${GITHUB_REF_NAME} does not match version v${version}"; exit 1; }
+          fi
       - run: node scripts/resources.mjs check
 
   build:
@@ -80,7 +85,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
+          tagName: v__VERSION__
+          releaseCommitish: ${{ github.sha }}
           releaseName: Glee __VERSION__
           releaseDraft: true
           prerelease: false

@@ -5,15 +5,11 @@
 1. Update the version in `package.json`, `src-tauri/Cargo.toml`, and
    `src-tauri/tauri.conf.json` (`pnpm verify:version` checks they match), and
    add an entry to `CHANGELOG.md`.
-2. Commit, then tag and push:
-
-   ```sh
-   git tag v0.1.1
-   git push origin v0.1.1
-   ```
-
-3. The **Release** workflow builds the Windows installer and the universal
-   macOS disk image and attaches them to a **draft** GitHub release.
+2. Commit and push to `main`.
+3. In the repository's **Actions** tab, open **Release** and click
+   **Run workflow** (or push a tag such as `v0.1.1`). The workflow builds the
+   Windows installer and the universal macOS disk image and attaches them to
+   a **draft** release named after the version.
 4. Test the installers, then publish the draft.
 
 ## Signing (recommended)
