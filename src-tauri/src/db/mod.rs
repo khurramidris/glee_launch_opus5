@@ -2531,11 +2531,11 @@ mod tests {
                     created_at TEXT NOT NULL
                 );
                 INSERT INTO characters (id, name, description, system_prompt, created_at, updated_at)
-                VALUES ('main-char', 'Main Eight', '', '', '2026-01-01', '2026-01-01');
+                VALUES ('main-char', 'Main Eight', '', '', '2000-01-01', '2000-01-01');
                 INSERT INTO chats (id, title, character_id, chat_mode, history_epoch, created_at, updated_at)
-                VALUES ('main-chat', 'Main v8', 'main-char', 'single', 7, '2026-01-01', '2026-01-01');
+                VALUES ('main-chat', 'Main v8', 'main-char', 'single', 7, '2000-01-01', '2000-01-01');
                 INSERT INTO messages (id, chat_id, role, content, created_at)
-                VALUES ('main-message', 'main-chat', 'user', 'committed in v8', '2026-01-01');
+                VALUES ('main-message', 'main-chat', 'user', 'committed in v8', '2000-01-01');
                 ",
             )
             .expect("main v8 fixture should initialize");
@@ -2619,13 +2619,13 @@ mod tests {
                     FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
                 );
                 INSERT INTO characters (id, name, description, system_prompt, card_passthrough_json, created_at, updated_at)
-                VALUES ('clone-char', 'Clone Nine', '', '', '{\"future\":{\"keep\":true}}', '2026-01-01', '2026-01-01');
+                VALUES ('clone-char', 'Clone Nine', '', '', '{\"future\":{\"keep\":true}}', '2000-01-01', '2000-01-01');
                 INSERT INTO chats (id, title, character_id, chat_mode, created_at, updated_at)
-                VALUES ('clone-chat', 'Clone v9', 'clone-char', 'single', '2026-01-01', '2026-01-01');
+                VALUES ('clone-chat', 'Clone v9', 'clone-char', 'single', '2000-01-01', '2000-01-01');
                 INSERT INTO messages (id, chat_id, role, content, created_at)
-                VALUES ('clone-message', 'clone-chat', 'user', 'edited in v9', '2026-01-01');
+                VALUES ('clone-message', 'clone-chat', 'user', 'edited in v9', '2000-01-01');
                 INSERT INTO message_embedding_invalidations (message_id, invalidated_at)
-                VALUES ('clone-message', '2026-01-02');
+                VALUES ('clone-message', '2000-01-02');
                 ",
             )
             .expect("clone v9 fixture should initialize");

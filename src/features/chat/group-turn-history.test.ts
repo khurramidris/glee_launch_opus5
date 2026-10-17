@@ -9,7 +9,7 @@ const baseHistory: ChatMessage[] = [
     chatId: "chat-1",
     role: "user",
     content: "Look what I have in my hand.",
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2000-01-01T00:00:00.000Z",
   },
 ];
 
@@ -21,7 +21,7 @@ const currentHistory: ChatMessage[] = [
     role: "assistant",
     content: "I glance toward your hand.",
     speakerCharacterId: "char-1",
-    createdAt: "2026-01-01T00:00:01.000Z",
+    createdAt: "2000-01-01T00:00:01.000Z",
   },
 ];
 
@@ -40,7 +40,7 @@ describe("historyForQueuedSpeakerTurn", () => {
             content:
               "System is asking: core contract.\nChris: Stay back from that display.",
             speakerCharacterId: "char-1",
-            createdAt: "2026-01-01T00:00:01.000Z",
+            createdAt: "2000-01-01T00:00:01.000Z",
           },
         ],
       }),
@@ -52,7 +52,7 @@ describe("historyForQueuedSpeakerTurn", () => {
         role: "assistant",
         content: "Stay back from that display.",
         speakerCharacterId: "char-1",
-        createdAt: "2026-01-01T00:00:01.000Z",
+        createdAt: "2000-01-01T00:00:01.000Z",
       },
     ]);
   });
@@ -70,7 +70,7 @@ describe("historyForQueuedSpeakerTurn", () => {
             role: "assistant",
             content: 'Previous group reply from Lara: "I am listening."',
             speakerCharacterId: "char-1",
-            createdAt: "2026-01-01T00:00:01.000Z",
+            createdAt: "2000-01-01T00:00:01.000Z",
           },
         ],
       }),
@@ -82,7 +82,7 @@ describe("historyForQueuedSpeakerTurn", () => {
         role: "assistant",
         content: '"I am listening."',
         speakerCharacterId: "char-1",
-        createdAt: "2026-01-01T00:00:01.000Z",
+        createdAt: "2000-01-01T00:00:01.000Z",
       },
     ]);
   });
@@ -100,7 +100,7 @@ describe("historyForQueuedSpeakerTurn", () => {
           role: "assistant",
           content: longReply,
           speakerCharacterId: "char-1",
-          createdAt: "2026-01-01T00:00:01.000Z",
+          createdAt: "2000-01-01T00:00:01.000Z",
         },
         {
           id: "assistant-2",
@@ -108,7 +108,7 @@ describe("historyForQueuedSpeakerTurn", () => {
           role: "assistant",
           content: longReply,
           speakerCharacterId: "char-2",
-          createdAt: "2026-01-01T00:00:02.000Z",
+          createdAt: "2000-01-01T00:00:02.000Z",
         },
         {
           id: "assistant-3",
@@ -116,7 +116,7 @@ describe("historyForQueuedSpeakerTurn", () => {
           role: "assistant",
           content: longReply,
           speakerCharacterId: "char-3",
-          createdAt: "2026-01-01T00:00:03.000Z",
+          createdAt: "2000-01-01T00:00:03.000Z",
         },
         {
           id: "assistant-4",
@@ -124,7 +124,7 @@ describe("historyForQueuedSpeakerTurn", () => {
           role: "assistant",
           content: longReply,
           speakerCharacterId: "char-4",
-          createdAt: "2026-01-01T00:00:04.000Z",
+          createdAt: "2000-01-01T00:00:04.000Z",
         },
         {
           id: "assistant-5",
@@ -132,7 +132,7 @@ describe("historyForQueuedSpeakerTurn", () => {
           role: "assistant",
           content: longReply,
           speakerCharacterId: "char-5",
-          createdAt: "2026-01-01T00:00:05.000Z",
+          createdAt: "2000-01-01T00:00:05.000Z",
         },
       ],
     });

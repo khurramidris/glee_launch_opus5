@@ -350,7 +350,7 @@ const preparedForStopForgiveness: PreparedResponseRequest = {
         chatId: "chat-1",
         role: "assistant",
         content: previousApology,
-        createdAt: "2026-04-30T00:00:00.000Z",
+        createdAt: "2000-04-30T00:00:00.000Z",
       },
       {
         id: "user-1",
@@ -358,7 +358,7 @@ const preparedForStopForgiveness: PreparedResponseRequest = {
         role: "user",
         content:
           "okay stop asking for forgiveness, its alright. will you now get dressed and go out for dinner with me?",
-        createdAt: "2026-04-30T00:01:00.000Z",
+        createdAt: "2000-04-30T00:01:00.000Z",
       },
     ],
   },
@@ -896,14 +896,14 @@ describe("evaluateCharacterReply", () => {
               role: "assistant",
               content:
                 "I keep my hands where you can see them, but this does not mean I trust you.",
-              createdAt: "2026-05-05T00:00:00.000Z",
+              createdAt: "2000-05-05T00:00:00.000Z",
             },
             {
               id: "user-repeat-1",
               chatId: "chat-1",
               role: "user",
               content: "What now?",
-              createdAt: "2026-05-05T00:01:00.000Z",
+              createdAt: "2000-05-05T00:01:00.000Z",
             },
           ],
         },
@@ -1365,7 +1365,7 @@ describe("evaluateCharacterReply", () => {
               chatId: "chat-1",
               role: "assistant",
               content: previousApology,
-              createdAt: "2026-04-30T00:00:00.000Z",
+              createdAt: "2000-04-30T00:00:00.000Z",
             },
             {
               id: "user-1",
@@ -1373,14 +1373,14 @@ describe("evaluateCharacterReply", () => {
               role: "user",
               content:
                 "no need for forgiveness, i like what i see I say with a hint of flirt",
-              createdAt: "2026-04-30T00:01:00.000Z",
+              createdAt: "2000-04-30T00:01:00.000Z",
             },
             {
               id: "user-2",
               chatId: "chat-1",
               role: "user",
               content: "???",
-              createdAt: "2026-04-30T00:02:00.000Z",
+              createdAt: "2000-04-30T00:02:00.000Z",
             },
           ],
         },

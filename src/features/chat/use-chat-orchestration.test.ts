@@ -371,7 +371,7 @@ describe("use-chat-orchestration repair requests", () => {
   it("appends a normal assistant reply through the lifecycle append boundary", async () => {
     const appendMessage = vi.fn(async (payload) => ({
       id: "assistant-1",
-      createdAt: "2026-05-01T00:00:00.000Z",
+      createdAt: "2000-05-01T00:00:00.000Z",
       ...payload,
     }));
 
@@ -409,7 +409,7 @@ describe("use-chat-orchestration repair requests", () => {
     });
     const appendMessage = vi.fn(async (payload) => ({
       id: "assistant-1",
-      createdAt: "2026-05-01T00:00:00.000Z",
+      createdAt: "2000-05-01T00:00:00.000Z",
       ...payload,
     }));
 
@@ -496,7 +496,7 @@ describe("use-chat-orchestration repair requests", () => {
   it("retries a failed direct generation once and appends the recovered reply", async () => {
     const appendMessage = vi.fn(async (payload) => ({
       id: "assistant-1",
-      createdAt: "2026-05-01T00:00:00.000Z",
+      createdAt: "2000-05-01T00:00:00.000Z",
       ...payload,
     }));
     const generateReplyText = vi
@@ -522,7 +522,7 @@ describe("use-chat-orchestration repair requests", () => {
   it("persists a recoverable failure message after both direct attempts fail", async () => {
     const appendMessage = vi.fn(async (payload) => ({
       id: "assistant-1",
-      createdAt: "2026-05-01T00:00:00.000Z",
+      createdAt: "2000-05-01T00:00:00.000Z",
       ...payload,
     }));
     const generateReplyText = vi
@@ -553,7 +553,7 @@ describe("use-chat-orchestration repair requests", () => {
   it("retries group generation and persists an explicit recovery event on failure", async () => {
     const appendMessage = vi.fn(async (payload) => ({
       id: "assistant-1",
-      createdAt: "2026-05-01T00:00:00.000Z",
+      createdAt: "2000-05-01T00:00:00.000Z",
       ...payload,
     }));
 
@@ -587,7 +587,7 @@ describe("use-chat-orchestration repair requests", () => {
   it("retries empty direct replies before persisting a recoverable failure message", async () => {
     const appendMessage = vi.fn(async (payload) => ({
       id: "assistant-1",
-      createdAt: "2026-05-01T00:00:00.000Z",
+      createdAt: "2000-05-01T00:00:00.000Z",
       ...payload,
     }));
     const generateReplyText = vi.fn().mockResolvedValue("   ");
@@ -610,7 +610,7 @@ describe("use-chat-orchestration repair requests", () => {
   it("retries an empty group reply and persists an explicit recovery event", async () => {
     const appendMessage = vi.fn(async (payload) => ({
       id: "assistant-1",
-      createdAt: "2026-05-01T00:00:00.000Z",
+      createdAt: "2000-05-01T00:00:00.000Z",
       ...payload,
     }));
 

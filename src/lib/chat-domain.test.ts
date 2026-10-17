@@ -32,8 +32,8 @@ function mockCharacter(): Character {
     tags: [],
     likes: [],
     dislikes: [],
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2000-01-01T00:00:00.000Z",
+    updatedAt: "2000-01-01T00:00:00.000Z",
   };
 }
 
@@ -44,14 +44,14 @@ function mockMessages(): ChatMessage[] {
       chatId: "c1",
       role: "user",
       content: "I like chess.",
-      createdAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2000-01-01T00:00:00.000Z",
     },
     {
       id: "m2",
       chatId: "c1",
       role: "assistant",
       content: "Great hobby.",
-      createdAt: "2026-01-01T00:01:00.000Z",
+      createdAt: "2000-01-01T00:01:00.000Z",
     },
   ];
 }
@@ -72,7 +72,7 @@ describe("chat-domain", () => {
       chatId: "c1",
       summary: "User likes games",
       facts: ["I like chess", "I live in SF"],
-      updatedAt: "2026-01-01T00:02:00.000Z",
+      updatedAt: "2000-01-01T00:02:00.000Z",
     };
     const text = composeMemorySystemMessage(memory) ?? "";
     expect(text).toContain("Summary: User likes games");
@@ -88,15 +88,15 @@ describe("chat-domain", () => {
         keywords: ["city"],
         content: "City is rainy",
         enabled: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
+        createdAt: "2000-01-01T00:00:00.000Z",
+        updatedAt: "2000-01-01T00:00:00.000Z",
       },
     ];
     const memory: ChatMemory = {
       chatId: "c1",
       summary: "summary",
       facts: [],
-      updatedAt: "2026-01-01T00:02:00.000Z",
+      updatedAt: "2000-01-01T00:02:00.000Z",
     };
     const payload = toLlamaMessagesWithMemoryAndContext(
       mockMessages(),
@@ -114,7 +114,7 @@ describe("chat-domain", () => {
       chatId: "c1",
       role: index % 2 === 0 ? "user" : "assistant",
       content: `snippet-${index + 1}`,
-      createdAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2000-01-01T00:00:00.000Z",
       score: 0.8,
     }));
     const text = composeSemanticMemorySystemMessage(snippets) ?? "";
@@ -130,7 +130,7 @@ describe("chat-domain", () => {
         chatId: "c1",
         role: "user",
         content: "User said they prefer direct answers.",
-        createdAt: "2026-01-01T00:00:00.000Z",
+        createdAt: "2000-01-01T00:00:00.000Z",
         score: 0.92,
       },
     ];
@@ -155,7 +155,7 @@ describe("chat-domain", () => {
         chatId: "c1",
         role: "user",
         content: "I work as an engineer.",
-        createdAt: "2026-01-01T00:03:00.000Z",
+        createdAt: "2000-01-01T00:03:00.000Z",
       },
     ]);
     expect(facts.some((fact) => fact.toLowerCase().includes("i work as"))).toBe(true);
@@ -169,14 +169,14 @@ describe("chat-domain", () => {
         chatId: "c1",
         role: "user",
         content: "My name is Sam. I'm from Denver. I dislike loud clubs.",
-        createdAt: "2026-01-01T00:00:00.000Z",
+        createdAt: "2000-01-01T00:00:00.000Z",
       },
       {
         id: "m2",
         chatId: "c1",
         role: "user",
         content: "Please remember that I need direct answers. My name is Sam.",
-        createdAt: "2026-01-01T00:01:00.000Z",
+        createdAt: "2000-01-01T00:01:00.000Z",
       },
     ]);
 
@@ -202,7 +202,7 @@ describe("chat-domain", () => {
           chatId: "c1",
           role: "user",
           content: "Who has the map?",
-          createdAt: "2026-01-01T00:00:00.000Z",
+          createdAt: "2000-01-01T00:00:00.000Z",
         },
         {
           id: "m2",
@@ -210,7 +210,7 @@ describe("chat-domain", () => {
           role: "assistant",
           content: "I packed it this morning.",
           speakerCharacterId: "lara",
-          createdAt: "2026-01-01T00:01:00.000Z",
+          createdAt: "2000-01-01T00:01:00.000Z",
         },
         {
           id: "m3",
@@ -218,7 +218,7 @@ describe("chat-domain", () => {
           role: "assistant",
           content: "[Glee reply failed] Pooja could not complete this reply.",
           speakerCharacterId: "pooja",
-          createdAt: "2026-01-01T00:02:00.000Z",
+          createdAt: "2000-01-01T00:02:00.000Z",
         },
       ],
       { lara: "Lara", pooja: "Pooja" },
@@ -236,8 +236,8 @@ describe("chat-domain", () => {
       chatMode: "single",
       participantIds: ["char-1"],
       historyEpoch: 0,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2000-01-01T00:00:00.000Z",
+      updatedAt: "2000-01-01T00:00:00.000Z",
     };
     const ids = chatParticipantIds(chat);
     expect(ids).toEqual(["char-1"]);
@@ -254,7 +254,7 @@ describe("chat-domain", () => {
   });
 
   it("buildExportSlug normalizes labels", () => {
-    expect(buildExportSlug("My Chat / 2026")).toBe("my-chat-2026");
+    expect(buildExportSlug("My Chat / 42")).toBe("my-chat-42");
     expect(buildExportSlug("$$$")).toBe("chat");
   });
 });

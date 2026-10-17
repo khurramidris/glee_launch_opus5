@@ -46,8 +46,8 @@ function makeCharacter(input: {
     characterVersion: "",
     cardExtensions: {},
     exampleDialogue: "",
-    createdAt: "2026-04-16T00:00:00.000Z",
-    updatedAt: "2026-04-16T00:00:00.000Z",
+    createdAt: "2000-04-16T00:00:00.000Z",
+    updatedAt: "2000-04-16T00:00:00.000Z",
   };
 }
 
@@ -64,8 +64,8 @@ function makeUserProfile(input: {
     traits: [],
     preferences: "",
     boundaries: "",
-    createdAt: "2026-04-16T00:00:00.000Z",
-    updatedAt: "2026-04-16T00:00:00.000Z",
+    createdAt: "2000-04-16T00:00:00.000Z",
+    updatedAt: "2000-04-16T00:00:00.000Z",
   };
 }
 
@@ -83,7 +83,7 @@ function makeRelationshipState(input: {
     userState: "",
     userRoleName: "",
     userRoleDescription: "",
-    updatedAt: "2026-04-16T00:00:00.000Z",
+    updatedAt: "2000-04-16T00:00:00.000Z",
   };
 }
 
@@ -164,7 +164,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "I like the red one Priyanka, buy that one I say excitingly",
-        createdAt: "2026-04-16T03:14:00.000Z",
+        createdAt: "2000-04-16T03:14:00.000Z",
       },
       {
         id: "ms-assistant-1",
@@ -173,7 +173,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '"That red one really does stand out. If Priyanka wants something bold, it suits the moment."',
         speakerCharacterId: "char-lara",
-        createdAt: "2026-04-16T03:16:00.000Z",
+        createdAt: "2000-04-16T03:16:00.000Z",
       },
       {
         id: "ms-assistant-2",
@@ -182,7 +182,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '"Ooh, red is daring. If she wants something that feels exciting, that one is hard to ignore."',
         speakerCharacterId: "char-pooja",
-        createdAt: "2026-04-16T03:19:00.000Z",
+        createdAt: "2000-04-16T03:19:00.000Z",
       },
       {
         id: "ms-assistant-3",
@@ -191,7 +191,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '"I do like the red one. It feels lively, but I still want to hear what else is around before I commit."',
         speakerCharacterId: "char-priyanka",
-        createdAt: "2026-04-16T03:20:00.000Z",
+        createdAt: "2000-04-16T03:20:00.000Z",
       },
     ],
   },
@@ -216,7 +216,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "I want candies I say shoutingly",
-        createdAt: "2026-04-16T14:47:00.000Z",
+        createdAt: "2000-04-16T14:47:00.000Z",
       },
       {
         id: "cs-assistant-1",
@@ -225,7 +225,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '*Lara blinks at the outburst.* "You do not have to shout. Just point at what you want."',
         speakerCharacterId: "char-lara",
-        createdAt: "2026-04-16T14:49:00.000Z",
+        createdAt: "2000-04-16T14:49:00.000Z",
       },
       {
         id: "cs-assistant-2",
@@ -234,7 +234,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '*Priyanka edges back from the shelf.* "Hey, calm down. We can figure it out without yelling."',
         speakerCharacterId: "char-priyanka",
-        createdAt: "2026-04-16T14:50:00.000Z",
+        createdAt: "2000-04-16T14:50:00.000Z",
       },
     ],
   },
@@ -260,7 +260,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "Hey look over there, i see a dolphin *I say excitingly*",
-        createdAt: "2026-04-16T14:10:00.000Z",
+        createdAt: "2000-04-16T14:10:00.000Z",
       },
       {
         id: "bp-assistant-1",
@@ -269,7 +269,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '*Lara smiles toward the water.* "Dolphins this close to shore are a lovely surprise."',
         speakerCharacterId: "char-lara",
-        createdAt: "2026-04-16T14:12:00.000Z",
+        createdAt: "2000-04-16T14:12:00.000Z",
       },
       {
         id: "bp-assistant-2",
@@ -278,7 +278,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '"Oh wow, that really is adorable. It keeps popping back up like it wants an audience."',
         speakerCharacterId: "char-pooja",
-        createdAt: "2026-04-16T14:14:00.000Z",
+        createdAt: "2000-04-16T14:14:00.000Z",
       },
     ],
   },
@@ -304,7 +304,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "I think I am gonna order a steak *I say looking at the menu*",
-        createdAt: "2026-04-16T16:55:00.000Z",
+        createdAt: "2000-04-16T16:55:00.000Z",
       },
       {
         id: "rs-assistant-1",
@@ -313,7 +313,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '"A steak makes sense here. If you want something hearty, that is the obvious choice."',
         speakerCharacterId: "char-lara",
-        createdAt: "2026-04-16T16:57:00.000Z",
+        createdAt: "2000-04-16T16:57:00.000Z",
       },
     ],
   },
@@ -338,7 +338,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "I wanna have cheese pizza I say looking at the menu card",
-        createdAt: "2026-04-20T14:31:00.000Z",
+        createdAt: "2000-04-20T14:31:00.000Z",
       },
     ],
   },
@@ -365,7 +365,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         role: "user",
         content:
           "I wanna have a coffee I say while looking at a woman on the other table",
-        createdAt: "2026-04-20T15:30:00.000Z",
+        createdAt: "2000-04-20T15:30:00.000Z",
       },
     ],
   },
@@ -391,7 +391,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "Pooja I dont think you are appropriately dressed for this place *I say naughtily*",
-        createdAt: "2026-04-16T18:11:00.000Z",
+        createdAt: "2000-04-16T18:11:00.000Z",
       },
     ],
   },
@@ -417,7 +417,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "What do you wanna eat Pooja? I just want to eat priyanka tonight I say naughilty",
-        createdAt: "2026-04-17T14:19:00.000Z",
+        createdAt: "2000-04-17T14:19:00.000Z",
       },
       {
         id: "ir-assistant-1",
@@ -426,7 +426,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           "*Oh! Well, you can't just eat Priyanka like that. Let me see what I can do to make it more... interesting.* How about we order some spicy chicken tikka masala?",
         speakerCharacterId: "char-pooja",
-        createdAt: "2026-04-17T14:22:00.000Z",
+        createdAt: "2000-04-17T14:22:00.000Z",
       },
     ],
   },
@@ -451,7 +451,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "I want to buy parmesan cheese, what do you want Pooja?",
-        createdAt: "2026-04-18T14:50:00.000Z",
+        createdAt: "2000-04-18T14:50:00.000Z",
       },
     ],
   },
@@ -476,7 +476,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         chatId: "chat-group-regression",
         role: "user",
         content: "I wanna buy some sneakers I say excitingly",
-        createdAt: "2026-04-18T15:35:00.000Z",
+        createdAt: "2000-04-18T15:35:00.000Z",
       },
       {
         id: "small-assistant-1",
@@ -485,7 +485,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         content:
           '"Of course, we can start with the sneaker shops on this floor and narrow it down from there."',
         speakerCharacterId: "char-yulian",
-        createdAt: "2026-04-18T15:38:00.000Z",
+        createdAt: "2000-04-18T15:38:00.000Z",
       },
     ],
   },
@@ -511,7 +511,7 @@ export const GROUP_REGRESSION_SCENARIOS: GroupRegressionScenario[] = [
         role: "user",
         content:
           "Can you please change the music Lara, I say loudly to Lara who is driving",
-        createdAt: "2026-04-20T16:02:00.000Z",
+        createdAt: "2000-04-20T16:02:00.000Z",
       },
     ],
   },

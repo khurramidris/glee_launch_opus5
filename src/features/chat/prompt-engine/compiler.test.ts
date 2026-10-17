@@ -30,8 +30,8 @@ const speaker: Character = {
     "User: Can I trust you?",
     "Aria: Depends. But if you want the truth, stay close and listen.",
   ].join("\n"),
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  createdAt: "2000-01-01T00:00:00.000Z",
+  updatedAt: "2000-01-01T00:00:00.000Z",
 };
 
 const userProfile: UserProfile = {
@@ -42,8 +42,8 @@ const userProfile: UserProfile = {
   traits: ["curious", "persistent"],
   preferences: "Prefers tension with warmth.",
   boundaries: "Avoids cruelty and humiliation.",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  createdAt: "2000-01-01T00:00:00.000Z",
+  updatedAt: "2000-01-01T00:00:00.000Z",
 };
 
 const relationshipState: ChatRelationshipState = {
@@ -55,14 +55,14 @@ const relationshipState: ChatRelationshipState = {
   userState: "Anxious but steady.",
   userRoleName: "",
   userRoleDescription: "",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2000-01-01T00:00:00.000Z",
 };
 
 const memory: ChatMemory = {
   chatId: "chat-1",
   summary: "Sam previously revealed fear of abandonment.",
   facts: ["Sam hates being lied to", "Aria promised honesty"],
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2000-01-01T00:00:00.000Z",
 };
 
 const contextEntries: ContextEntry[] = [
@@ -74,8 +74,8 @@ const contextEntries: ContextEntry[] = [
     keywords: ["conspiracy", "diner"],
     content: "The conspiracy reaches into city hall.",
     enabled: true,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2000-01-01T00:00:00.000Z",
+    updatedAt: "2000-01-01T00:00:00.000Z",
   },
 ];
 
@@ -84,7 +84,7 @@ const semanticMemorySnippets: MemorySnippet[] = [
     chatId: "chat-1",
     role: "user",
     content: "Please don't disappear on me again.",
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2000-01-01T00:00:00.000Z",
     score: 0.92,
   },
 ];
@@ -95,7 +95,7 @@ const history: ChatMessage[] = [
     chatId: "chat-1",
     role: "user",
     content: "Tell me what you found.",
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2000-01-01T00:00:00.000Z",
   },
 ];
 
@@ -258,14 +258,14 @@ describe("character prompt compiler", () => {
           role: "assistant",
           content:
             "\"My prince...\" Anastasia's voice trembled in the cathedral air.\n\nHe turned slowly beneath the stained-glass light.",
-          createdAt: "2026-01-01T00:00:00.000Z",
+          createdAt: "2000-01-01T00:00:00.000Z",
         },
         {
           id: "m-user",
           chatId: "chat-1",
           role: "user",
           content: "What are you doing?",
-          createdAt: "2026-01-01T00:00:00.000Z",
+          createdAt: "2000-01-01T00:00:00.000Z",
         },
       ],
     });
@@ -298,7 +298,7 @@ describe("character prompt compiler", () => {
           chatId: "chat-1",
           role: "user",
           content: "Put your hands up. I have an AK47 on you.",
-          createdAt: "2026-01-01T00:00:00.000Z",
+          createdAt: "2000-01-01T00:00:00.000Z",
         },
       ],
     });
@@ -334,7 +334,7 @@ describe("character prompt compiler", () => {
           chatId: "chat-1",
           role: "user",
           content: "Look what I have in my hand.",
-          createdAt: "2026-01-01T00:00:00.000Z",
+          createdAt: "2000-01-01T00:00:00.000Z",
         },
       ],
     });
@@ -369,7 +369,7 @@ describe("character prompt compiler", () => {
           chatId: "chat-1",
           role: "user",
           content: "Look what I am driving.",
-          createdAt: "2026-01-01T00:00:00.000Z",
+          createdAt: "2000-01-01T00:00:00.000Z",
         },
       ],
     });

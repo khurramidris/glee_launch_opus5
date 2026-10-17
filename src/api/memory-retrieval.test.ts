@@ -10,7 +10,7 @@ describe("batched memory retrieval", () => {
   it("uses one native request and preserves each speaker's ranking", async () => {
     const raw = (id: string) => ({
       message_id: id, chat_id: "chat", role: "user", content: `passage ${id}`,
-      speaker_character_id: null, created_at: "2026-10-08T00:00:00Z", score: 100,
+      speaker_character_id: null, created_at: "2000-10-08T00:00:00Z", score: 100,
     });
     vi.mocked(invoke).mockResolvedValue([[raw("a")], [raw("b")]]);
     const result = await resolveMemorySnippetsBatch([

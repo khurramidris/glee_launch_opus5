@@ -25,7 +25,7 @@ const snapshot: DiagnosticsSnapshot = {
   platform: "windows-x64",
   runtime,
   startup: {
-    checkedAt: "2026-03-09T00:00:00.000Z",
+    checkedAt: "2000-03-09T00:00:00.000Z",
     overallStatus: "warn",
     appDataDir: "D:/data",
     databasePath: "D:/data/glee.sqlite3",
@@ -35,7 +35,7 @@ const snapshot: DiagnosticsSnapshot = {
     embeddingAvailable: true,
     indexing: {
       status: "degraded",
-      updatedAt: "2026-03-09T00:00:00.000Z",
+      updatedAt: "2000-03-09T00:00:00.000Z",
       lastError: "sqlite-vec missing",
     },
     checks: [
@@ -61,12 +61,12 @@ const snapshot: DiagnosticsSnapshot = {
     {
       key: "runtime_performance_mode",
       value: "gpu",
-      updatedAt: "2026-03-09T00:00:00.000Z",
+      updatedAt: "2000-03-09T00:00:00.000Z",
     },
     {
       key: "runtime_gpu_layers",
       value: "18",
-      updatedAt: "2026-03-09T00:00:00.000Z",
+      updatedAt: "2000-03-09T00:00:00.000Z",
     },
   ],
   featureExposure: {

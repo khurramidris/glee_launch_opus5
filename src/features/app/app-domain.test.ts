@@ -29,8 +29,8 @@ const character: Character = {
   boundaries: "",
   creatorNotes: "",
   exampleDialogue: "User: Hello\\nAria: Hi there.",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  createdAt: "2000-01-01T00:00:00.000Z",
+  updatedAt: "2000-01-01T00:00:00.000Z",
 };
 
   const userProfile: UserProfile = {
@@ -41,8 +41,8 @@ const character: Character = {
     traits: ["curious", "direct"],
     preferences: "Prefers emotionally grounded responses.",
     boundaries: "Avoids condescension.",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  createdAt: "2000-01-01T00:00:00.000Z",
+  updatedAt: "2000-01-01T00:00:00.000Z",
 };
 
 const relationshipState: ChatRelationshipState = {
@@ -54,7 +54,7 @@ const relationshipState: ChatRelationshipState = {
   userState: "Reflective and a little tired.",
   userRoleName: "",
   userRoleDescription: "",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2000-01-01T00:00:00.000Z",
 };
 
 describe("app-domain", () => {

@@ -9,15 +9,15 @@ describe("tauri api mapping", () => {
       chat_mode: "single",
       participant_ids: [],
       history_epoch: 4,
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:01.000Z",
+      created_at: "2000-01-01T00:00:00.000Z",
+      updated_at: "2000-01-01T00:00:01.000Z",
     });
     expect(chat.historyEpoch).toBe(4);
 
     const mutation = __testing.mapHistoryMutation({
       chat_id: "chat-1",
       history_epoch: 5,
-      updated_at: "2026-01-01T00:00:02.000Z",
+      updated_at: "2000-01-01T00:00:02.000Z",
       messages: [],
     });
     expect(mutation).toMatchObject({
@@ -37,8 +37,8 @@ describe("tauri api mapping", () => {
       avatar: null,
       tags: "friend, helper, friend",
       example_dialogue: null,
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
+      created_at: "2000-01-01T00:00:00.000Z",
+      updated_at: "2000-01-01T00:00:00.000Z",
     });
     expect(character.tags).toEqual(["friend", "helper", "friend"]);
     expect(character.systemPrompt).toBe("Stay practical");
@@ -49,7 +49,7 @@ describe("tauri api mapping", () => {
       chat_id: "chat-1",
       summary: "summary",
       facts_json: '["alpha","beta","alpha"]',
-      updated_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2000-01-01T00:00:00.000Z",
     });
     expect(memory.facts).toEqual(["alpha", "beta"]);
 
@@ -60,8 +60,8 @@ describe("tauri api mapping", () => {
       keywords_json: '["rain","city","rain"]',
       content: "Rainy city",
       enabled: 1,
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
+      created_at: "2000-01-01T00:00:00.000Z",
+      updated_at: "2000-01-01T00:00:00.000Z",
     });
     expect(context.keywords).toEqual(["rain", "city"]);
     expect(context.enabled).toBe(true);
@@ -101,7 +101,7 @@ describe("tauri api mapping", () => {
         },
       },
       startup: {
-        checked_at: "2026-03-09T00:00:00.000Z",
+        checked_at: "2000-03-09T00:00:00.000Z",
         overall_status: "warn",
         app_data_dir: "D:/data",
         database_path: "D:/data/glee.sqlite3",
@@ -111,7 +111,7 @@ describe("tauri api mapping", () => {
         embedding_available: true,
         indexing: {
           status: "degraded",
-          updated_at: "2026-03-09T00:00:00.000Z",
+          updated_at: "2000-03-09T00:00:00.000Z",
           last_error: "sqlite-vec missing",
         },
         checks: [
@@ -129,7 +129,7 @@ describe("tauri api mapping", () => {
         {
           key: "active_model_id",
           value: "model-1",
-          updated_at: "2026-03-09T00:00:00.000Z",
+          updated_at: "2000-03-09T00:00:00.000Z",
         },
       ],
       feature_exposure: {
@@ -145,7 +145,7 @@ describe("tauri api mapping", () => {
     expect(diagnostics.runtime.selection?.attemptedBackend).toBe("cuda");
     expect(diagnostics.runtime.selection?.detectedGpus[0]?.totalVramMb).toBe(2048);
     expect(diagnostics.startup.appDataDir).toBe("D:/data");
-    expect(diagnostics.settings[0]?.updatedAt).toBe("2026-03-09T00:00:00.000Z");
+    expect(diagnostics.settings[0]?.updatedAt).toBe("2000-03-09T00:00:00.000Z");
     expect(diagnostics.featureExposure.labs).toContain("semantic vector retrieval");
   });
 
@@ -155,20 +155,20 @@ describe("tauri api mapping", () => {
         warmup_enabled: true,
         performance_mode: "auto",
         gpu_layers: 0,
-        updated_at: "2026-04-06T00:00:00.000Z",
+        updated_at: "2000-04-06T00:00:00.000Z",
       }),
     ).toEqual({
       warmupEnabled: true,
       performanceMode: "auto",
       gpuLayers: 0,
-      updatedAt: "2026-04-06T00:00:00.000Z",
+      updatedAt: "2000-04-06T00:00:00.000Z",
     });
 
     expect(
       __testing.mapRuntimeLaunchSettings({
         warmup_enabled: true,
         gpu_layers: "16",
-        updated_at: "2026-04-06T00:00:00.000Z",
+        updated_at: "2000-04-06T00:00:00.000Z",
       }),
     ).toMatchObject({
       performanceMode: "gpu",
@@ -189,7 +189,7 @@ describe("tauri api mapping", () => {
       path: "D:/data/backups/glee-manual-20260714.sqlite3",
       reason: "manual",
       size_bytes: 4096,
-      modified_at: "2026-07-14T12:00:00.000Z",
+      modified_at: "2000-07-14T12:00:00.000Z",
     });
     const restored = __testing.mapDatabaseRestoreResponse({
       restored_from: "D:/data/backups/glee-manual-20260714.sqlite3",
@@ -203,7 +203,7 @@ describe("tauri api mapping", () => {
       path: "D:/data/backups/glee-manual-20260714.sqlite3",
       reason: "manual",
       sizeBytes: 4096,
-      modifiedAt: "2026-07-14T12:00:00.000Z",
+      modifiedAt: "2000-07-14T12:00:00.000Z",
     });
     expect(restored.safetyBackupPath).toBe(
       "D:/data/backups/glee-pre-restore-20260714.sqlite3",

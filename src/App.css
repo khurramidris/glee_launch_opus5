@@ -3554,7 +3554,7 @@ dialog.command-overlay {
 
 }
 
-/* Grand redesign override: hub-first cream/yellow minimal shell */
+/* Shell: hub-first cream/yellow minimal layout */
 
 :root {
   --font-heading: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
@@ -4709,7 +4709,7 @@ button.ghost {
   width: min(980px, calc(100vw - 28px));
 }
 
-/* Shell redesign override: April 2026 */
+/* Shell layout */
 .window-bar {
   padding: 10px 22px 0;
 }
@@ -5429,7 +5429,7 @@ button.ghost {
   }
 }
 
-/* Grand shell redesign */
+/* Shell structure */
 
 .window-drag {
   padding: 8px 14px;
@@ -5938,7 +5938,7 @@ button.ghost {
   }
 }
 
-/* Hierarchy cleanup pass */
+/* Visual hierarchy */
 
 .glee-layout {
   grid-template-columns: minmax(208px, 228px) minmax(0, 1.58fr) minmax(250px, 286px);
@@ -6234,7 +6234,7 @@ button.ghost {
   }
 }
 
-/* Hierarchy cleanup pass */
+/* Visual hierarchy */
 
 .window-drag {
   padding: 6px 12px;
@@ -6582,7 +6582,7 @@ button.ghost {
   }
 }
 
-/* April 2026 shell reset: flat rails, equal widths, no desktop control reflow */
+/* Shell rails: flat, equal widths, no desktop control reflow */
 
 .window-drag {
   padding: 6px 12px;
@@ -6973,7 +6973,7 @@ button.ghost {
   }
 }
 
-/* April 2026 shell polish pass */
+/* Shell details */
 
 .rail-toggle {
   top: -12px;
@@ -7377,7 +7377,7 @@ button.ghost {
   letter-spacing: 0.03em;
 }
 
-/* April 2026 final polish slice */
+/* Shell refinements */
 
 body {
   background: transparent;
@@ -8796,7 +8796,7 @@ body::after {
   display: none;
 }
 
-/* July 2026 product UI reset: compact, quiet, character-first, and accessible. */
+/* Product UI: compact, quiet, character-first, and accessible. */
 :root {
   --font-body: "Segoe UI Variable", "Segoe UI Variable Text", "Segoe UI", "Inter", system-ui, sans-serif;
   --font-heading: var(--font-body);

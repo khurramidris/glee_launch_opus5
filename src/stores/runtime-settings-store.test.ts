@@ -58,7 +58,7 @@ describe("runtime-settings-store helpers", () => {
         warmupEnabled: false,
         performanceMode: "gpu",
         gpuLayers: 24,
-        updatedAt: "2026-04-06T00:00:00.000Z",
+        updatedAt: "2000-04-06T00:00:00.000Z",
       }),
     ).toEqual({
       warmupEnabled: false,
@@ -73,17 +73,17 @@ describe("runtime-settings-store helpers", () => {
         {
           key: "runtime_warmup_enabled",
           value: "false",
-          updatedAt: "2026-04-06T00:00:00.000Z",
+          updatedAt: "2000-04-06T00:00:00.000Z",
         },
         {
           key: "runtime_performance_mode",
           value: "cpu",
-          updatedAt: "2026-04-06T00:00:00.000Z",
+          updatedAt: "2000-04-06T00:00:00.000Z",
         },
         {
           key: "runtime_gpu_layers",
           value: "18",
-          updatedAt: "2026-04-06T00:00:00.000Z",
+          updatedAt: "2000-04-06T00:00:00.000Z",
         },
       ]),
     ).toEqual({

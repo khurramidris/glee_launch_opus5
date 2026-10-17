@@ -14,7 +14,7 @@ const failureMessage: ChatMessage = {
   content:
     "[Glee reply failed] Pooja could not complete this reply after an automatic retry. Select Regenerate to try again.",
   speakerCharacterId: "pooja",
-  createdAt: "2026-01-01T00:00:00.000Z",
+  createdAt: "2000-01-01T00:00:00.000Z",
 };
 
 afterEach(cleanup);

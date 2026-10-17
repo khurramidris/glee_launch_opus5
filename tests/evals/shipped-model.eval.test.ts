@@ -23,7 +23,7 @@ const reportPath = resolve(
 );
 const model = "ternary-bonsai-2-4b-q2_0";
 const apiKey = process.env.GLEE_MODEL_EVAL_API_KEY?.trim() ?? "";
-const timestamp = "2026-01-01T00:00:00.000Z";
+const timestamp = "2000-01-01T00:00:00.000Z";
 
 const userProfile: UserProfile = {
   name: "Sam",

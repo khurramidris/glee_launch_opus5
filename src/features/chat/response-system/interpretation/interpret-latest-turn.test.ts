@@ -8,7 +8,7 @@ function userMessage(content: string) {
     chatId: "chat-1",
     role: "user" as const,
     content,
-    createdAt: "2026-04-30T00:00:00.000Z",
+    createdAt: "2000-04-30T00:00:00.000Z",
   };
 }
 
@@ -18,7 +18,7 @@ function assistantMessage(content: string) {
     chatId: "chat-1",
     role: "assistant" as const,
     content,
-    createdAt: "2026-04-30T00:00:00.000Z",
+    createdAt: "2000-04-30T00:00:00.000Z",
   };
 }
 
