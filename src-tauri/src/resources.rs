@@ -95,6 +95,11 @@ pub struct ModelAsset {
     pub id: String,
     pub role: ModelRole,
     pub display_name: String,
+    /// Platforms this file is meant for. Empty means "every platform without a
+    /// more specific entry", which lets a platform use a different packing of
+    /// the same model when its engine needs one.
+    #[serde(default)]
+    pub platforms: Vec<String>,
     #[serde(flatten)]
     pub source: DownloadSource,
 }
@@ -154,16 +159,28 @@ impl ResourceManifest {
             model.source.validate()?;
         }
         for role in [ModelRole::Chat, ModelRole::Embedding] {
-            if self
+            let defaults = self
+                .models
+                .iter()
+                .filter(|model| model.role == role && model.platforms.is_empty())
+                .count();
+            if defaults != 1 {
+                return Err(AppError::Validation(format!(
+                    "resource manifest must define exactly one default {role:?} model"
+                )));
+            }
+            let mut claimed = std::collections::HashSet::new();
+            for platform in self
                 .models
                 .iter()
                 .filter(|model| model.role == role)
-                .count()
-                != 1
+                .flat_map(|model| model.platforms.iter())
             {
-                return Err(AppError::Validation(format!(
-                    "resource manifest must define exactly one {role:?} model"
-                )));
+                if !claimed.insert(platform) {
+                    return Err(AppError::Validation(format!(
+                        "{platform} has more than one {role:?} model"
+                    )));
+                }
             }
         }
         for runtime in &self.runtimes {
@@ -180,11 +197,17 @@ impl ResourceManifest {
         Ok(())
     }
 
-    pub fn model(&self, role: ModelRole) -> &ModelAsset {
+    /// The model file a platform should use for a role.
+    pub fn model_for(&self, role: ModelRole, platform: &str) -> &ModelAsset {
         self.models
             .iter()
-            .find(|model| model.role == role)
-            .expect("validated manifest defines every model role")
+            .find(|model| model.role == role && model.platforms.iter().any(|p| p == platform))
+            .or_else(|| {
+                self.models
+                    .iter()
+                    .find(|model| model.role == role && model.platforms.is_empty())
+            })
+            .expect("validated manifest defines a default model for every role")
     }
 
     pub fn runtimes_for(&self, platform: &str) -> Vec<&RuntimeAsset> {
@@ -302,19 +325,23 @@ impl Resources {
     }
 
     pub fn model_asset(&self, role: ModelRole) -> &ModelAsset {
-        self.manifest.model(role)
+        self.manifest.model_for(role, &self.platform)
     }
 
     /// Where a model lives once installed, whether or not it exists yet.
     pub fn model_path(&self, role: ModelRole) -> PathBuf {
-        self.root
-            .join("models")
-            .join(&self.manifest.model(role).source.file_name)
+        self.root.join("models").join(
+            &self
+                .manifest
+                .model_for(role, &self.platform)
+                .source
+                .file_name,
+        )
     }
 
     /// The model path if the file is installed and unchanged since it was verified.
     pub fn installed_model_path(&self, role: ModelRole) -> Option<PathBuf> {
-        let asset = self.manifest.model(role);
+        let asset = self.manifest.model_for(role, &self.platform);
         let record = self.read_record();
         let installed = record.assets.get(&model_key(asset))?;
         let path = self.model_path(role);
@@ -349,7 +376,7 @@ impl Resources {
         let record = self.read_record();
         let mut items = Vec::new();
         for role in [ModelRole::Chat, ModelRole::Embedding] {
-            let asset = self.manifest.model(role);
+            let asset = self.manifest.model_for(role, &self.platform);
             let installed = record
                 .assets
                 .get(&model_key(asset))
@@ -672,7 +699,7 @@ impl Resources {
             }
         }
         for role in [ModelRole::Chat, ModelRole::Embedding] {
-            let asset = self.manifest.model(role);
+            let asset = self.manifest.model_for(role, &self.platform);
             let path = self.model_path(role);
             let fast_match = record
                 .assets
@@ -985,7 +1012,7 @@ impl Resources {
     fn cleanup_stale_files(&self) {
         let mut wanted = std::collections::HashSet::new();
         for role in [ModelRole::Chat, ModelRole::Embedding] {
-            wanted.insert(model_key(self.manifest.model(role)));
+            wanted.insert(model_key(self.manifest.model_for(role, &self.platform)));
         }
         for runtime in &self.manifest.runtimes {
             wanted.insert(runtime_key(runtime));
@@ -1882,7 +1909,10 @@ mod tests {
                 "{platform} needs a required runtime"
             );
         }
-        assert_eq!(manifest.model(ModelRole::Chat).role, ModelRole::Chat);
+        assert_eq!(
+            manifest.model_for(ModelRole::Chat, "windows-x64").role,
+            ModelRole::Chat
+        );
         assert!(manifest
             .mirrors
             .iter()
@@ -1915,6 +1945,20 @@ mod tests {
             ResourceManifest::parse(&base(SHA_A, "https://example.org/c", "../c.gguf")).is_err()
         );
         assert!(ResourceManifest::parse(&base(SHA_A, "http://127.0.0.1:9/c", "c.gguf")).is_ok());
+    }
+
+    #[test]
+    fn platforms_can_use_a_different_packing_of_the_chat_model() {
+        let manifest = ResourceManifest::parse(BUNDLED_MANIFEST).unwrap();
+        let mac = manifest.model_for(ModelRole::Chat, "macos-arm64");
+        let windows = manifest.model_for(ModelRole::Chat, "windows-x64");
+        assert!(mac.platforms.contains(&"macos-arm64".to_string()));
+        assert!(windows.platforms.is_empty());
+        assert_ne!(mac.source.sha256, windows.source.sha256);
+        assert_eq!(
+            manifest.model_for(ModelRole::Embedding, "macos-arm64").id,
+            manifest.model_for(ModelRole::Embedding, "windows-x64").id
+        );
     }
 
     #[test]

@@ -41,6 +41,14 @@ function currentPlatform() {
   return `${os}-${arch}`;
 }
 
+// Mirrors ResourceManifest::model_for in src-tauri/src/resources.rs.
+function modelFor(manifest, role, platform) {
+  return (
+    manifest.models.find((model) => model.role === role && (model.platforms ?? []).includes(platform)) ??
+    manifest.models.find((model) => model.role === role && !(model.platforms ?? []).length)
+  );
+}
+
 function check() {
   const manifest = readManifest();
   const failures = [];
@@ -49,7 +57,8 @@ function check() {
     if (!/^https:\/\/[^/]+\.[^/]+\//.test(mirror)) failures.push(`mirror must be an https URL ending in '/': ${mirror}`);
   }
   for (const role of ["chat", "embedding"]) {
-    if (manifest.models.filter((model) => model.role === role).length !== 1) failures.push(`exactly one ${role} model is required`);
+    const defaults = manifest.models.filter((model) => model.role === role && !(model.platforms ?? []).length);
+    if (defaults.length !== 1) failures.push(`exactly one default ${role} model is required`);
   }
   for (const asset of allAssets(manifest)) {
     const label = asset.id ?? asset.fileName;
@@ -150,8 +159,8 @@ async function smoke({ runEval }) {
   const runtime = manifest.runtimes.find((entry) => entry.platform === platform && !entry.optional);
   if (!runtime) throw new Error(`no required runtime for ${platform}`);
   const work = path.join(root, ".artifacts", "smoke");
-  const chat = manifest.models.find((model) => model.role === "chat");
-  const embedding = manifest.models.find((model) => model.role === "embedding");
+  const chat = modelFor(manifest, "chat", platform);
+  const embedding = modelFor(manifest, "embedding", platform);
   const started = Date.now();
   const archive = await download(runtime, path.join(work, runtime.fileName));
   const chatModel = await download(chat, path.join(work, chat.fileName));
