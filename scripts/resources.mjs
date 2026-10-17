@@ -153,6 +153,29 @@ async function waitForHealth(port, child, label) {
   throw new Error(`${label} server did not become healthy`);
 }
 
+// Keep in sync with src-tauri/src/gpu_check.rs.
+async function gpuCheck(port, key) {
+  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      messages: [{ role: "user", content: "What is 2 + 2? Reply with only the number." }],
+      temperature: 0,
+      max_tokens: 8,
+      cache_prompt: false,
+    }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = await response.json();
+  return body.choices?.[0]?.message?.content ?? "";
+}
+
+function answerLooksRight(answer) {
+  const text = answer.toLowerCase();
+  const first = text.replace(/^[^\p{L}\p{N}]+/u, "").split(/[^\p{L}\p{N}]/u)[0];
+  return first === "4" || first === "four" || text.includes("= 4") || text.includes("is 4");
+}
+
 async function smoke({ runEval }) {
   const manifest = readManifest();
   const platform = currentPlatform();
@@ -184,17 +207,35 @@ async function smoke({ runEval }) {
   const keyFile = path.join(work, "server.key");
   writeFileSync(keyFile, key);
   const port = 18080;
-  const offload = runtime.backend === "cpu" ? ["-ngl", "0"] : [];
-  const chatServer = spawn(server, ["-m", chatModel, "--host", "127.0.0.1", "--port", String(port), "--api-key-file", keyFile, "--no-webui", "--no-slots", ...CHAT_ARGS, ...offload], {
-    cwd: path.dirname(server),
-    stdio: ["ignore", "inherit", "inherit"],
-  });
+  const startChat = (offload) =>
+    spawn(server, ["-m", chatModel, "--host", "127.0.0.1", "--port", String(port), "--api-key-file", keyFile, "--no-webui", "--no-slots", ...CHAT_ARGS, ...offload], {
+      cwd: path.dirname(server),
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+  let chatServer = startChat(runtime.backend === "cpu" ? ["-ngl", "0"] : []);
   const embedServer = spawn(server, ["-m", embeddingModel, "--host", "127.0.0.1", "--port", String(port + 1), "--embeddings", "--pooling", "cls", "-ngl", "0", "--no-webui"], {
     cwd: path.dirname(server),
     stdio: ["ignore", "ignore", "inherit"],
   });
   try {
     await waitForHealth(port, chatServer, "chat");
+    if (runtime.backend !== "cpu") {
+      // Mirrors gpu_check::verify in the app: a GPU can come up healthy and still
+      // compute garbage (GitHub's virtual macOS GPU does), so check, then use the CPU.
+      const answer = await gpuCheck(port, key);
+      if (answerLooksRight(answer)) {
+        notice("gpu check", `${runtime.backend} answered ${JSON.stringify(answer)}`);
+      } else {
+        notice("gpu check failed", `${runtime.backend} answered ${JSON.stringify(answer.slice(0, 60))}; continuing on the CPU like the app does`);
+        const exited = chatServer.exitCode === null ? new Promise((resolve) => chatServer.once("exit", resolve)) : null;
+        chatServer.kill();
+        await exited;
+        chatServer = startChat(["-ngl", "0", "--device", "none"]);
+        await waitForHealth(port, chatServer, "chat (CPU)");
+        const cpuAnswer = await gpuCheck(port, key);
+        if (!answerLooksRight(cpuAnswer)) throw new Error(`CPU answer also looked wrong: ${JSON.stringify(cpuAnswer)}`);
+      }
+    }
     await waitForHealth(port + 1, embedServer, "embedding");
     const endpoint = `http://127.0.0.1:${port}/v1/chat/completions`;
     const unauthorized = await fetch(endpoint, { method: "POST" });

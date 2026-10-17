@@ -3,6 +3,7 @@ mod character_card;
 mod db;
 mod embedding_service;
 mod errors;
+mod gpu_check;
 mod resources;
 mod runtime_manager;
 mod runtime_selection;
@@ -29,9 +30,10 @@ use character_card::{
 use db::{Database, UserProfilePatch};
 use embedding_service::{EmbeddingService, EmbeddingServiceConfig};
 use errors::{AppError, AppResult};
+use gpu_check::GpuCheckStore;
 use resources::{AppProgressSink, ModelRole, Resources};
 use runtime_manager::{RuntimeManager, RuntimeStartRequest};
-use runtime_selection::{chat_server_args, cpu_fallback_plan, plan_chat_launch};
+use runtime_selection::{chat_server_args, cpu_fallback_plan, plan_chat_launch, RuntimeLaunchPlan};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sysinfo::Disks;
@@ -49,12 +51,12 @@ use types::{
     HealthCheckStatus, ImportCharacterCardInput, ImportModelInput, IndexingDiagnostics,
     IndexingHealthStatus, MemorySnippetRecord, MessageRecord, ModelRecord, PersonaPresetRecord,
     ResolveContextEntriesInput, ResolveMemorySnippetsInput, ResourceStatusResponse,
-    RestoreDatabaseBackupInput, RuntimeBackend, RuntimeLaunchSettingsRecord,
-    RuntimePerformanceMode, RuntimeStatusResponse, StartRuntimeInput, StartupHealthSnapshot,
-    UpdateCharacterInput, UpdateContextEntryInput, UpdateGenerationPresetInput,
-    UpdateGroupChatInput, UpdateMessageInput, UpdatePersonaPresetInput,
-    UpdateRuntimeLaunchSettingsInput, UpsertChatMemoryInput, UpsertChatPresetProfileInput,
-    UpsertChatRelationshipStateInput, UpsertUserProfileInput, UserProfileRecord,
+    RestoreDatabaseBackupInput, RuntimeLaunchSettingsRecord, RuntimePerformanceMode,
+    RuntimeStatusResponse, StartRuntimeInput, StartupHealthSnapshot, UpdateCharacterInput,
+    UpdateContextEntryInput, UpdateGenerationPresetInput, UpdateGroupChatInput, UpdateMessageInput,
+    UpdatePersonaPresetInput, UpdateRuntimeLaunchSettingsInput, UpsertChatMemoryInput,
+    UpsertChatPresetProfileInput, UpsertChatRelationshipStateInput, UpsertUserProfileInput,
+    UserProfileRecord,
 };
 
 #[derive(Clone)]
@@ -1457,10 +1459,8 @@ async fn start_runtime<R: tauri::Runtime>(
         args.extend(explicit_args.iter().cloned());
         args
     };
-    let plan = plan_chat_launch(&state.resources, performance_mode, manual_gpu_layers).await?;
-    let result = state
-        .runtime_manager
-        .start(
+    let launch = |plan: &RuntimeLaunchPlan| {
+        state.runtime_manager.start(
             &app_handle,
             RuntimeStartRequest {
                 model_id: model.id.clone(),
@@ -1470,33 +1470,47 @@ async fn start_runtime<R: tauri::Runtime>(
                 selection: Some(plan.selection.clone()),
             },
         )
-        .await;
-
-    match result {
-        Ok(status) => Ok(status),
-        Err(error) if plan.backend != RuntimeBackend::Cpu => {
-            state.runtime_manager.stop().await?;
-            let fallback = cpu_fallback_plan(
-                &state.resources,
-                &plan.selection,
-                format!("GPU startup failed, so Glee is using the CPU. Original error: {error}"),
-            )?;
-            state
-                .runtime_manager
-                .start(
-                    &app_handle,
-                    RuntimeStartRequest {
-                        model_id: model.id.clone(),
-                        model_path,
-                        binary_path: fallback.binary_path.clone(),
-                        extra_args: launch_args(&fallback.offload_args),
-                        selection: Some(fallback.selection),
-                    },
-                )
-                .await
-        }
-        Err(error) => Err(error),
+    };
+    let plan = plan_chat_launch(&state.resources, performance_mode, manual_gpu_layers).await?;
+    if !plan.backend.is_gpu() {
+        return launch(&plan).await;
     }
+
+    let checks = GpuCheckStore::new(state.app_data_dir.join("runtime").join("gpu-checks.json"));
+    let check_key = gpu_check::check_key(&model.id, &plan.selection);
+    let known = checks.get(&check_key);
+    // In Auto mode a GPU that failed before goes straight to the CPU; choosing
+    // GPU mode explicitly checks it again.
+    let fallback_reason = if known == Some(false)
+        && performance_mode == RuntimePerformanceMode::Auto
+    {
+        "This graphics processor gave unreadable replies before, so Glee is using the CPU."
+            .to_string()
+    } else {
+        match launch(&plan).await {
+            Ok(status) if known == Some(true) => return Ok(status),
+            Ok(status) => match gpu_check::verify(&status).await {
+                Ok(()) => {
+                    checks.put(&check_key, true);
+                    return Ok(status);
+                }
+                Err(detail) => {
+                    eprintln!("GPU output check failed: {detail}");
+                    checks.put(&check_key, false);
+                    state.runtime_manager.stop().await?;
+                    format!(
+                        "The graphics processor gave unreadable replies ({detail}), so Glee is using the CPU."
+                    )
+                }
+            },
+            Err(error) => {
+                state.runtime_manager.stop().await?;
+                format!("GPU startup failed, so Glee is using the CPU. Original error: {error}")
+            }
+        }
+    };
+    let fallback = cpu_fallback_plan(&state.resources, &plan.selection, fallback_reason)?;
+    launch(&fallback).await
 }
 
 #[tauri::command]
