@@ -17,6 +17,7 @@
     "core:window:allow-set-position",
     "core:window:allow-set-shadow",
     "dialog:allow-open",
+    "dialog:allow-save",
     {
       "identifier": "http:default",
       "allow": [

@@ -8,17 +8,22 @@ import type {
   Character,
   ChatRelationshipState,
   ChatHistoryMutation,
+  AutoSummaryBatch,
   ChatMemory,
   ChatMessage,
   ChatPresetProfile,
+  Persona,
+  PersonaDraft,
   ChatSummary,
   ContextEntry,
   CreateCharacterPayload,
   CreateContextEntryPayload,
   CreateGenerationPresetPayload,
+  CreateMemoryItemPayload,
   DatabaseBackup,
   DatabaseBackupResponse,
   DatabaseRestoreResponse,
+  DeleteMemoryItemsForPayload,
   DetectedGpuDevice,
   DownloadModelPayload,
   DiagnosticsExportResponse,
@@ -30,6 +35,12 @@ import type {
   HealthCheckRecord,
   ImportModelPayload,
   IndexingDiagnostics,
+  ListMemoryItemsPayload,
+  MemoryExtractionBatch,
+  MemoryExtractionOutcome,
+  MemoryItem,
+  MemoryKind,
+  MemoryScope,
   MemorySnippet,
   ModelInfo,
   RuntimeLaunchSettings,
@@ -40,9 +51,11 @@ import type {
   RuntimeStartPayload,
   RuntimeState,
   StartupHealthSnapshot,
+  StoreMemoryExtractionPayload,
   UpdateCharacterPayload,
   UpdateContextEntryPayload,
   UpdateGenerationPresetPayload,
+  UpdateMemoryItemPayload,
   UpdateMessagePayload,
   EditAndTruncatePayload,
   UpsertChatMemoryPayload,
@@ -118,9 +131,21 @@ interface RawMessageRecord {
 interface RawChatMemoryRecord {
   chat_id: string;
   summary?: string | null;
+  summary_auto?: boolean | number | null;
+  summarized_through_message_id?: string | null;
   facts_json?: string | null;
   facts?: string[] | string | null;
   updated_at: string;
+}
+
+interface RawAutoSummaryBatchRecord {
+  chat_id: string;
+  history_epoch: number;
+  writable: boolean;
+  previous_summary?: string | null;
+  summarized_through_message_id?: string | null;
+  pending_count: number;
+  messages: RawMessageRecord[];
 }
 
 interface RawUserProfileRecord {
@@ -166,6 +191,41 @@ interface RawContextEntryRecord {
   updated_at: string;
 }
 
+interface RawMemoryItemRecord {
+  id: string;
+  scope: MemoryScope;
+  character_id?: string | null;
+  chat_id?: string | null;
+  kind: MemoryKind;
+  content: string;
+  importance: number;
+  pinned: boolean | number;
+  source_message_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_recalled_at?: string | null;
+  recall_count?: number | null;
+  archived: boolean | number;
+}
+
+interface RawMemoryExtractionBatchRecord {
+  chat_id: string;
+  history_epoch: number;
+  ready: boolean;
+  pending_count: number;
+  last_message_id?: string | null;
+  participants?: Array<{ id: string; name: string }> | null;
+  messages?: RawMessageRecord[] | null;
+  related_items?: RawMemoryItemRecord[] | null;
+}
+
+interface RawMemoryExtractionOutcomeRecord {
+  added?: RawMemoryItemRecord[] | null;
+  updated?: RawMemoryItemRecord[] | null;
+  removed?: string[] | null;
+  skipped?: number | null;
+}
+
 interface RawMemorySnippetRecord {
   chat_id?: string | null;
   chatId?: string | null;
@@ -205,6 +265,7 @@ interface RawResourceStatus {
   platform: string;
   platform_supported: boolean;
   missing_required_bytes: number;
+  partial_required_bytes?: number;
   items: Array<{
     key: string;
     label: string;
@@ -367,6 +428,16 @@ interface RawGenerationPresetRecord {
 interface RawChatPresetProfileRecord {
   chat_id: string;
   generation_preset_id?: string | null;
+  persona_preset_id?: string | null;
+  updated_at: string;
+}
+
+interface RawPersonaPresetRecord {
+  id: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+  created_at: string;
   updated_at: string;
 }
 
@@ -600,8 +671,22 @@ function mapChatMemory(record: RawChatMemoryRecord): ChatMemory {
   return {
     chatId: record.chat_id,
     summary: record.summary?.trim() ?? "",
+    summaryAuto: Boolean(record.summary_auto),
+    summarizedThroughMessageId: record.summarized_through_message_id ?? null,
     facts: [...new Set(parseStringList(record.facts, record.facts_json))],
     updatedAt: record.updated_at,
+  };
+}
+
+function mapAutoSummaryBatch(record: RawAutoSummaryBatchRecord): AutoSummaryBatch {
+  return {
+    chatId: record.chat_id,
+    historyEpoch: record.history_epoch,
+    writable: record.writable,
+    previousSummary: record.previous_summary?.trim() ?? "",
+    summarizedThroughMessageId: record.summarized_through_message_id ?? null,
+    pendingCount: record.pending_count,
+    messages: record.messages.map(mapMessage),
   };
 }
 
@@ -650,11 +735,61 @@ function mapContextEntry(record: RawContextEntryRecord): ContextEntry {
   };
 }
 
+function mapMemoryItem(record: RawMemoryItemRecord): MemoryItem {
+  return {
+    id: record.id,
+    scope: record.scope,
+    characterId: toOptionalString(record.character_id),
+    chatId: toOptionalString(record.chat_id),
+    kind: record.kind,
+    content: record.content,
+    importance: toNumber(record.importance, 3),
+    pinned: typeof record.pinned === "boolean" ? record.pinned : record.pinned !== 0,
+    sourceMessageId: toOptionalString(record.source_message_id),
+    createdAt: record.created_at,
+    updatedAt: record.updated_at,
+    lastRecalledAt: toOptionalString(record.last_recalled_at),
+    recallCount: toNumber(record.recall_count, 0),
+    archived: typeof record.archived === "boolean" ? record.archived : record.archived !== 0,
+  };
+}
+
+function mapMemoryExtractionBatch(record: RawMemoryExtractionBatchRecord): MemoryExtractionBatch {
+  return {
+    chatId: record.chat_id,
+    historyEpoch: record.history_epoch,
+    ready: record.ready,
+    pendingCount: record.pending_count,
+    lastMessageId: toOptionalString(record.last_message_id),
+    participants: (record.participants ?? []).map((participant) => ({
+      id: participant.id,
+      name: participant.name,
+    })),
+    messages: (record.messages ?? []).map(mapMessage),
+    relatedItems: (record.related_items ?? []).map(mapMemoryItem),
+  };
+}
+
+function mapMemoryExtractionOutcome(
+  record: RawMemoryExtractionOutcomeRecord,
+): MemoryExtractionOutcome {
+  return {
+    added: (record.added ?? []).map(mapMemoryItem),
+    updated: (record.updated ?? []).map(mapMemoryItem),
+    removed: record.removed ?? [],
+    skipped: toNumber(record.skipped, 0),
+  };
+}
+
 function mapMemorySnippet(record: RawMemorySnippetRecord, fallbackChatId?: string): MemorySnippet {
+  const messageId = toOptionalString(record.messageId ?? record.message_id);
+  const isMemoryItem = messageId?.startsWith("memory-item:") === true;
   return {
     chatId: toOptionalString(record.chatId ?? record.chat_id) ?? fallbackChatId ?? "",
-    messageId: toOptionalString(record.messageId ?? record.message_id),
-    role: record.role,
+    messageId,
+    ...(isMemoryItem ? { source: "memory-item" as const } : {}),
+    // Remembered items are not chat turns; they carry the system role.
+    role: isMemoryItem ? "system" : record.role,
     content: record.content,
     speakerCharacterId: toOptionalString(record.speakerCharacterId ?? record.speaker_character_id),
     createdAt: toOptionalString(record.createdAt ?? record.created_at) ?? "",
@@ -825,6 +960,18 @@ function mapChatPresetProfile(record: RawChatPresetProfileRecord): ChatPresetPro
   return {
     chatId: record.chat_id,
     generationPresetId: toOptionalString(record.generation_preset_id),
+    personaPresetId: toOptionalString(record.persona_preset_id),
+    updatedAt: record.updated_at,
+  };
+}
+
+function mapPersona(record: RawPersonaPresetRecord): Persona {
+  return {
+    id: record.id,
+    name: record.name,
+    about: record.description,
+    preferences: record.system_prompt,
+    createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
 }
@@ -841,6 +988,7 @@ export async function resourceStatus(): Promise<ResourceStatus> {
     platform: status.platform,
     platformSupported: status.platform_supported,
     missingRequiredBytes: status.missing_required_bytes,
+    partialRequiredBytes: status.partial_required_bytes ?? 0,
     items: status.items.map((item) => ({
       key: item.key,
       label: item.label,
@@ -1008,6 +1156,17 @@ export async function deleteCharacter(id: string): Promise<void> {
 export async function importCharacterCard(input: { path: string }): Promise<Character> {
   const character = await invoke<RawCharacterRecord>("import_character_card", { input });
   return mapCharacter(character);
+}
+
+export async function saveTextFile(input: {
+  path: string;
+  content: string;
+}): Promise<CharacterCardExportResponse> {
+  const response = await invoke<RawCharacterCardExportResponse>("save_text_file", {
+    path: input.path,
+    content: input.content,
+  });
+  return { path: response.path };
 }
 
 export async function exportCharacterCardJson(input: {
@@ -1186,6 +1345,23 @@ export async function editMessageAndTruncate(
   return mapHistoryMutation(mutation);
 }
 
+export async function deleteMessage(
+  messageId: string,
+  expectedHistoryEpoch: number,
+): Promise<ChatHistoryMutation> {
+  const mutation = await invoke<RawChatHistoryMutationRecord>("delete_message", {
+    input: { id: messageId, expected_history_epoch: expectedHistoryEpoch },
+  });
+  return mapHistoryMutation(mutation);
+}
+
+export async function renameChat(chatId: string, title: string): Promise<ChatSummary> {
+  const chat = await invoke<RawChatRecord>("rename_chat", {
+    input: { chat_id: chatId, title },
+  });
+  return mapChat(chat);
+}
+
 export async function branchChat(payload: BranchChatPayload): Promise<ChatSummary> {
   const response = await invoke<RawBranchChatResponse>("branch_chat", {
     input: {
@@ -1201,6 +1377,29 @@ export async function branchChat(payload: BranchChatPayload): Promise<ChatSummar
 export async function getChatMemory(chatId: string): Promise<ChatMemory> {
   const memory = await invoke<RawChatMemoryRecord>("get_chat_memory", { chatId });
   return mapChatMemory(memory);
+}
+
+export async function getAutoSummaryBatch(chatId: string): Promise<AutoSummaryBatch> {
+  const batch = await invoke<RawAutoSummaryBatchRecord>("get_auto_summary_batch", { chatId });
+  return mapAutoSummaryBatch(batch);
+}
+
+/** Resolves to null when the summary belongs to the user or the cursor would move backwards. */
+export async function storeAutoSummary(payload: {
+  chatId: string;
+  summary: string;
+  throughMessageId: string;
+  expectedHistoryEpoch?: number;
+}): Promise<ChatMemory | null> {
+  const memory = await invoke<RawChatMemoryRecord | null>("store_auto_summary", {
+    input: {
+      chat_id: payload.chatId,
+      summary: payload.summary,
+      through_message_id: payload.throughMessageId,
+      expected_history_epoch: payload.expectedHistoryEpoch,
+    },
+  });
+  return memory ? mapChatMemory(memory) : null;
 }
 
 export async function getUserProfile(): Promise<UserProfile> {
@@ -1276,6 +1475,48 @@ export async function upsertChatPresetProfile(
       chat_id: payload.chatId,
       generation_preset_id: toOptionalString(payload.generationPresetId),
     },
+  });
+  return mapChatPresetProfile(profile);
+}
+
+export async function listPersonas(): Promise<Persona[]> {
+  const personas = await invoke<RawPersonaPresetRecord[]>("list_persona_presets");
+  return personas.map(mapPersona);
+}
+
+export async function createPersona(draft: PersonaDraft): Promise<Persona> {
+  const persona = await invoke<RawPersonaPresetRecord>("create_persona_preset", {
+    input: {
+      name: draft.name,
+      description: draft.about,
+      system_prompt: draft.preferences,
+    },
+  });
+  return mapPersona(persona);
+}
+
+export async function updatePersona(id: string, draft: PersonaDraft): Promise<Persona> {
+  const persona = await invoke<RawPersonaPresetRecord>("update_persona_preset", {
+    input: {
+      id,
+      name: draft.name,
+      description: draft.about,
+      system_prompt: draft.preferences,
+    },
+  });
+  return mapPersona(persona);
+}
+
+export async function deletePersona(id: string): Promise<void> {
+  await invoke("delete_persona_preset", { presetId: id });
+}
+
+export async function setChatPersona(
+  chatId: string,
+  personaId: string | null,
+): Promise<ChatPresetProfile> {
+  const profile = await invoke<RawChatPresetProfileRecord>("set_chat_persona", {
+    input: { chat_id: chatId, persona_preset_id: personaId },
   });
   return mapChatPresetProfile(profile);
 }
@@ -1370,6 +1611,100 @@ export async function resolveMemorySnippetsBatch(inputs: MemoryRetrievalInput[])
   );
 }
 
+export async function listMemoryItems(payload: ListMemoryItemsPayload = {}): Promise<MemoryItem[]> {
+  const items = await invoke<RawMemoryItemRecord[]>("list_memory_items", {
+    input: {
+      scope: payload.scope,
+      character_id: payload.characterId,
+      chat_id: payload.chatId,
+      include_archived: payload.includeArchived ?? false,
+      visible_in_chat: payload.visibleInChat,
+    },
+  });
+  return items.map(mapMemoryItem);
+}
+
+export async function createMemoryItem(payload: CreateMemoryItemPayload): Promise<MemoryItem> {
+  const item = await invoke<RawMemoryItemRecord>("create_memory_item", {
+    input: {
+      scope: payload.scope,
+      character_id: payload.characterId,
+      chat_id: payload.chatId,
+      kind: payload.kind,
+      content: payload.content,
+      importance: payload.importance,
+      pinned: payload.pinned,
+      source_message_id: payload.sourceMessageId,
+    },
+  });
+  return mapMemoryItem(item);
+}
+
+export async function updateMemoryItem(payload: UpdateMemoryItemPayload): Promise<MemoryItem> {
+  const item = await invoke<RawMemoryItemRecord>("update_memory_item", {
+    input: {
+      id: payload.id,
+      content: payload.content,
+      importance: payload.importance,
+      pinned: payload.pinned,
+      archived: payload.archived,
+      kind: payload.kind,
+      scope: payload.scope,
+      character_id: payload.characterId,
+      chat_id: payload.chatId,
+    },
+  });
+  return mapMemoryItem(item);
+}
+
+export async function deleteMemoryItem(id: string): Promise<void> {
+  await invoke("delete_memory_item", { memoryItemId: id });
+}
+
+/** Forgets everything for one character, one chat, or the user scope; resolves to the count removed. */
+export async function deleteMemoryItemsFor(payload: DeleteMemoryItemsForPayload): Promise<number> {
+  return invoke<number>("delete_memory_items_for", {
+    input: {
+      scope: payload.scope,
+      character_id: payload.characterId,
+      chat_id: payload.chatId,
+    },
+  });
+}
+
+export async function getMemoryExtractionBatch(chatId: string): Promise<MemoryExtractionBatch> {
+  const batch = await invoke<RawMemoryExtractionBatchRecord>("get_memory_extraction_batch", {
+    chatId,
+  });
+  return mapMemoryExtractionBatch(batch);
+}
+
+export async function storeMemoryExtraction(
+  payload: StoreMemoryExtractionPayload,
+): Promise<MemoryExtractionOutcome> {
+  const outcome = await invoke<RawMemoryExtractionOutcomeRecord>("store_memory_extraction", {
+    input: {
+      chat_id: payload.chatId,
+      through_message_id: payload.throughMessageId,
+      expected_history_epoch: payload.expectedHistoryEpoch,
+      add: payload.add.map((entry) => ({
+        scope: entry.scope,
+        character_id: entry.characterId,
+        kind: entry.kind,
+        content: entry.content,
+        importance: entry.importance,
+      })),
+      update: payload.update.map((entry) => ({
+        id: entry.id,
+        content: entry.content,
+        importance: entry.importance,
+      })),
+      remove: payload.remove,
+    },
+  });
+  return mapMemoryExtractionOutcome(outcome);
+}
+
 export async function getDiagnosticsSnapshot(): Promise<DiagnosticsSnapshot> {
   const snapshot = await invoke<RawDiagnosticsSnapshot>("diagnostics_snapshot");
   return mapDiagnosticsSnapshot(snapshot);
@@ -1399,6 +1734,20 @@ export async function restoreDatabaseBackup(
   return mapDatabaseRestoreResponse(response);
 }
 
+export async function exportDatabaseBackup(fileName: string, path: string): Promise<string> {
+  const response = await invoke<RawDatabaseBackupResponse>("export_database_backup", {
+    input: { file_name: fileName, path },
+  });
+  return mapDatabaseBackupResponse(response).path;
+}
+
+export async function importDatabaseBackup(path: string): Promise<DatabaseBackup> {
+  const record = await invoke<RawDatabaseBackupRecord>("import_database_backup", {
+    input: { path },
+  });
+  return mapDatabaseBackup(record);
+}
+
 export const __testing = {
   mapModel,
   mapCharacter,
@@ -1406,10 +1755,14 @@ export const __testing = {
   mapMessage,
   mapHistoryMutation,
   mapChatMemory,
+  mapAutoSummaryBatch,
   mapUserProfile,
   mapChatRelationshipState,
   mapContextEntry,
   mapMemorySnippet,
+  mapMemoryItem,
+  mapMemoryExtractionBatch,
+  mapMemoryExtractionOutcome,
   mapRuntime,
   mapRuntimeLaunchSettings,
   mapAppSetting,

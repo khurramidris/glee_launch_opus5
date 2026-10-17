@@ -5,7 +5,14 @@ import type {
   PromptSectionKey,
   RuntimeSamplingProfile,
 } from "../response-system/types";
-import { mergePromptSections } from "../response-system/compile/prompt-budget";
+import {
+  STABLE_SYSTEM_PROMPT_CHARS,
+  TURN_NOTES_CHARS,
+  TURN_NOTES_CLOSE,
+  TURN_NOTES_OPEN,
+  mergePromptSections,
+  mergeTurnNotes,
+} from "../response-system/compile/prompt-budget";
 import { buildLlamaStopSequences } from "../response-sanitizer";
 import {
   DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -78,18 +85,12 @@ function ensureRequestEndsWithUserTurn(
 const STABLE_SECTION_ORDER: PromptSectionKey[] = [
   "system_contract",
   "character_identity",
-  "identity_guardrails",
-  "response_style",
-  "character_rules",
   "character_scene",
-  "character_dynamics",
+  "character_rules",
   "user_profile",
   "example_dialogue_notes",
 ];
-const STABLE_SYSTEM_PROMPT_CHARS = 3600;
-const TURN_NOTES_CHARS = 1800;
-export const TURN_NOTES_OPEN = "<reply notes>";
-export const TURN_NOTES_CLOSE = "</reply notes>";
+export { TURN_NOTES_CLOSE, TURN_NOTES_OPEN };
 
 function splitSections(sections: PromptSection[]): {
   stable: PromptSection[];
@@ -122,13 +123,28 @@ function withTurnNotes(messages: LlamaChatMessage[], notes: string): LlamaChatMe
   ];
 }
 
+/** The per-turn notes for `compiledPrompt`, one entry per line. */
+export function buildTurnNoteLines(compiledPrompt: CompiledCharacterPrompt): string[] {
+  const { turn } = splitSections(compiledPrompt.systemSections);
+  const notes = mergeTurnNotes(turn, TURN_NOTES_CHARS);
+  return notes ? notes.split("\n") : [];
+}
+
+/**
+ * `turnNotes` replaces the computed per-turn notes (extensions add lines to
+ * them); the stable system message is never affected.
+ */
 export function toLlamaChatMessages(
   compiledPrompt: CompiledCharacterPrompt,
+  turnNotes?: readonly string[],
 ): LlamaChatMessage[] {
   const messages: LlamaChatMessage[] = [];
   const { stable, turn } = splitSections(compiledPrompt.systemSections);
 
-  const systemPrompt = mergePromptSections(stable, STABLE_SYSTEM_PROMPT_CHARS);
+  const systemPrompt = mergePromptSections(
+    stable,
+    compiledPrompt.systemPromptMaxLength ?? STABLE_SYSTEM_PROMPT_CHARS,
+  );
   if (systemPrompt) {
     messages.push({ role: "system", content: systemPrompt });
   }
@@ -139,7 +155,7 @@ export function toLlamaChatMessages(
 
   // Per-turn guidance rides on the newest user message, the only part of the
   // prompt that is new anyway.
-  const notes = mergePromptSections(turn, TURN_NOTES_CHARS);
+  const notes = turnNotes ? turnNotes.join("\n") : mergeTurnNotes(turn, TURN_NOTES_CHARS);
   return withTurnNotes(ensureRequestEndsWithUserTurn(messages), notes);
 }
 
@@ -149,13 +165,18 @@ export function toLlamaChatRequest(input: {
   sampling: RuntimeSamplingProfile;
   stream: boolean;
   userName?: string;
+  // Group chats: the current speaker and everyone in the room, so lines
+  // labelled with another participant's name end the reply.
+  speakerName?: string;
+  participantNames?: string[];
+  turnNotes?: readonly string[];
 }): LlamaChatRequest {
   const maxTokens = clampOutputTokens(
     input.sampling.maxTokens,
     DEFAULT_CONTEXT_WINDOW_TOKENS,
   );
   const fitted = fitChatMessagesToContextWindow(
-    toLlamaChatMessages(input.compiledPrompt),
+    toLlamaChatMessages(input.compiledPrompt, input.turnNotes),
     {
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
       maxOutputTokens: maxTokens,
@@ -172,6 +193,10 @@ export function toLlamaChatRequest(input: {
     top_p: input.sampling.topP ?? DEFAULT_TOP_P,
     max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
     repeat_penalty: input.sampling.repeatPenalty ?? DEFAULT_REPEAT_PENALTY,
-    stop: buildLlamaStopSequences({ userName: input.userName }),
+    stop: buildLlamaStopSequences({
+      userName: input.userName,
+      speakerName: input.speakerName,
+      participantNames: input.participantNames,
+    }),
   };
 }

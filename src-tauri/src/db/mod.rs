@@ -1,7 +1,11 @@
+mod auto_summary;
+mod backup_files;
 mod characters;
 mod chats;
 mod context;
 mod memory;
+mod memory_items;
+mod message_ops;
 mod messages;
 mod models;
 mod presets;
@@ -22,6 +26,12 @@ use uuid::Uuid;
 use crate::errors::{AppError, AppResult};
 use crate::types::{BootstrapDbState, DatabaseBackupRecord};
 
+pub(crate) use memory_items::{
+    CreateMemoryItemInput, DeleteMemoryItemsForInput, ListMemoryItemsInput,
+    MemoryExtractionBatchRecord, MemoryExtractionOutcome, MemoryItemRecord, MemoryRetrievalRequest,
+    StoreMemoryExtractionInput, UpdateMemoryItemInput, MEMORY_EXTRACTION_MAX_ADDS,
+    MEMORY_EXTRACTION_RELATED_ITEMS, RETRIEVAL_CHAR_BUDGET, RETRIEVAL_MAX_ITEMS,
+};
 pub(crate) use profiles::UserProfilePatch;
 
 #[derive(Debug, Clone)]
@@ -61,7 +71,7 @@ pub fn register_vector_extension() -> bool {
     })
 }
 
-const CURRENT_SCHEMA_VERSION: i32 = 10;
+const CURRENT_SCHEMA_VERSION: i32 = 12;
 const MANUAL_BACKUP_RETENTION: usize = 10;
 const RECOVERY_BACKUP_RETENTION: usize = 5;
 
@@ -351,6 +361,8 @@ impl Database {
                 summary TEXT NOT NULL DEFAULT '',
                 facts_json TEXT NOT NULL DEFAULT '[]',
                 updated_at TEXT NOT NULL,
+                summary_auto INTEGER NOT NULL DEFAULT 0 CHECK (summary_auto IN (0, 1)),
+                summarized_through_message_id TEXT,
                 FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
             );
 
@@ -714,6 +726,29 @@ impl Database {
         )?;
         connection.execute("UPDATE chat_memory SET facts_json = '[]' WHERE facts_json IS NULL OR TRIM(facts_json) = ''", [])?;
         connection.execute("UPDATE chat_memory SET updated_at = ?1 WHERE updated_at IS NULL OR TRIM(updated_at) = ''", params![now])?;
+
+        // Summaries saved before this column existed were all produced by the
+        // app's own transcript digest, so they stay replaceable by the
+        // background summariser; only the first run over a legacy table flags them.
+        let had_summary_auto = column_exists(connection, "chat_memory", "summary_auto")?;
+        ensure_column_exists(
+            connection,
+            "chat_memory",
+            "summary_auto",
+            "INTEGER NOT NULL DEFAULT 0 CHECK (summary_auto IN (0, 1))",
+        )?;
+        ensure_column_exists(
+            connection,
+            "chat_memory",
+            "summarized_through_message_id",
+            "TEXT",
+        )?;
+        if !had_summary_auto {
+            connection.execute(
+                "UPDATE chat_memory SET summary_auto = 1 WHERE TRIM(summary) <> ''",
+                [],
+            )?;
+        }
 
         ensure_column_exists(connection, "messages", "speaker_character_id", "TEXT")?;
         connection.execute_batch(
@@ -1233,6 +1268,58 @@ impl Database {
         )?;
         connection.execute("UPDATE chat_relationship_states SET updated_at = ?1 WHERE updated_at IS NULL OR TRIM(updated_at) = ''", params![now])?;
 
+        // Schema v12: long-term memory items, their vectors, and the extraction cursor.
+        connection.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS memory_items (
+                id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL CHECK (scope IN ('user', 'character', 'chat')),
+                character_id TEXT,
+                chat_id TEXT,
+                kind TEXT NOT NULL DEFAULT 'fact'
+                    CHECK (kind IN ('fact', 'preference', 'event', 'relationship', 'promise')),
+                content TEXT NOT NULL,
+                importance INTEGER NOT NULL DEFAULT 3 CHECK (importance BETWEEN 1 AND 5),
+                pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+                source_message_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_recalled_at TEXT,
+                recall_count INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+                CHECK (
+                    (scope = 'user' AND character_id IS NULL AND chat_id IS NULL)
+                    OR (scope = 'character' AND character_id IS NOT NULL AND chat_id IS NULL)
+                    OR (scope = 'chat' AND chat_id IS NOT NULL AND character_id IS NULL)
+                ),
+                FOREIGN KEY(character_id) REFERENCES characters(id) ON DELETE CASCADE,
+                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_items_character
+                ON memory_items(character_id) WHERE character_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_memory_items_chat
+                ON memory_items(chat_id) WHERE chat_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_memory_items_scope_archived
+                ON memory_items(scope, archived);
+
+            CREATE TABLE IF NOT EXISTS memory_item_embeddings (
+                item_id TEXT PRIMARY KEY,
+                embedding_model_id TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                FOREIGN KEY(item_id) REFERENCES memory_items(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS memory_extraction_state (
+                chat_id TEXT PRIMARY KEY,
+                through_message_id TEXT NOT NULL,
+                through_created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
+            );
+            ",
+        )?;
+
         Ok(())
     }
 
@@ -1578,6 +1665,8 @@ fn backup_reason_from_name(file_name: &str) -> String {
         "pre-restore".to_string()
     } else if file_name.starts_with("glee-manual-") {
         "manual".to_string()
+    } else if file_name.starts_with("glee-imported-") {
+        "imported".to_string()
     } else {
         "other".to_string()
     }
@@ -1752,6 +1841,8 @@ fn schema_upgrade_requires_backup(connection: &Connection) -> AppResult<bool> {
         ("chat_memory", "summary"),
         ("chat_memory", "facts_json"),
         ("chat_memory", "updated_at"),
+        ("chat_memory", "summary_auto"),
+        ("chat_memory", "summarized_through_message_id"),
         ("messages", "speaker_character_id"),
         ("message_embedding_invalidations", "invalidated_at"),
         ("context_entries", "scope"),
@@ -1798,6 +1889,22 @@ fn schema_upgrade_requires_backup(connection: &Connection) -> AppResult<bool> {
         ("chat_relationship_states", "user_role_name"),
         ("chat_relationship_states", "user_role_description"),
         ("chat_relationship_states", "updated_at"),
+        ("memory_items", "scope"),
+        ("memory_items", "character_id"),
+        ("memory_items", "chat_id"),
+        ("memory_items", "kind"),
+        ("memory_items", "content"),
+        ("memory_items", "importance"),
+        ("memory_items", "pinned"),
+        ("memory_items", "source_message_id"),
+        ("memory_items", "created_at"),
+        ("memory_items", "updated_at"),
+        ("memory_items", "last_recalled_at"),
+        ("memory_items", "recall_count"),
+        ("memory_items", "archived"),
+        ("memory_item_embeddings", "embedding_model_id"),
+        ("memory_item_embeddings", "embedding"),
+        ("memory_extraction_state", "through_message_id"),
     ];
 
     let required_tables = [
@@ -1815,6 +1922,9 @@ fn schema_upgrade_requires_backup(connection: &Connection) -> AppResult<bool> {
         "app_settings",
         "user_profiles",
         "chat_relationship_states",
+        "memory_items",
+        "memory_item_embeddings",
+        "memory_extraction_state",
     ];
 
     if required_tables
@@ -1837,7 +1947,7 @@ fn validate_current_schema(connection: &Connection) -> AppResult<()> {
     validate_schema_compatibility(connection)?;
     if schema_upgrade_requires_backup(connection)? {
         return Err(AppError::DatabaseCompatibility(
-            "database does not match the complete Glee schema v10 contract".to_string(),
+            "database does not match the complete Glee schema v12 contract".to_string(),
         ));
     }
     let user_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -2499,7 +2609,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_main_v8_to_v10_without_losing_history_epoch() {
+    fn migrates_main_v8_to_v12_without_losing_history_epoch() {
         let path = test_db_path("main-v8-lineage");
         let connection = Connection::open(&path).expect("fixture connection should open");
         connection
@@ -2564,7 +2674,12 @@ mod tests {
         let version: i64 = migrated
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("version should resolve");
-        assert_eq!(version, 10);
+        assert_eq!(version, 12);
+        assert!(table_exists(&migrated, "memory_items").expect("memory table should resolve"));
+        assert!(table_exists(&migrated, "memory_item_embeddings")
+            .expect("memory embedding table should resolve"));
+        assert!(table_exists(&migrated, "memory_extraction_state")
+            .expect("memory cursor table should resolve"));
 
         let backup = database
             .last_migration_backup_path()
@@ -2581,7 +2696,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_clone_v9_to_v10_without_losing_card_or_invalidations() {
+    fn migrates_clone_v9_to_v12_without_losing_card_or_invalidations() {
         let path = test_db_path("clone-v9-lineage");
         let connection = Connection::open(&path).expect("fixture connection should open");
         connection
@@ -2672,12 +2787,12 @@ mod tests {
 
     #[test]
     fn rejects_future_schema_without_backup_or_mutation() {
-        let path = test_db_path("future-v11");
+        let path = test_db_path("future-v13");
         let connection = Connection::open(&path).expect("fixture connection should open");
         connection
             .execute_batch(
                 "
-                PRAGMA user_version = 11;
+                PRAGMA user_version = 13;
                 CREATE TABLE sentinel (value TEXT NOT NULL);
                 INSERT INTO sentinel (value) VALUES ('untouched');
                 ",
@@ -2694,7 +2809,7 @@ mod tests {
         let sentinel: String = connection
             .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
             .expect("sentinel should survive");
-        assert_eq!(version, 11);
+        assert_eq!(version, 13);
         assert_eq!(sentinel, "untouched");
         assert!(!path
             .parent()
@@ -2815,6 +2930,112 @@ mod tests {
             .upsert_chat_memory_at_epoch(&chat.id, Some("stale"), Some("[]"), Some(0))
             .expect_err("stale memory write must be rejected");
         assert!(matches!(stale_memory, AppError::Conflict(_)));
+    }
+
+    #[test]
+    fn migrates_v11_to_v12_adding_memory_tables_idempotently() {
+        let path = test_db_path("v11-to-v12");
+        let database = Database::new(path.clone()).expect("database should initialize");
+        let chat = database
+            .create_chat("Keep me", None)
+            .expect("chat should create");
+        drop(database);
+
+        let connection = Connection::open(&path).expect("connection should open");
+        connection
+            .execute_batch(
+                "
+                DROP TABLE memory_extraction_state;
+                DROP TABLE memory_item_embeddings;
+                DROP TABLE memory_items;
+                PRAGMA user_version = 11;
+                ",
+            )
+            .expect("v11 shape should restore");
+        drop(connection);
+
+        let database = Database::new(path.clone()).expect("v11 should migrate");
+        assert!(database.last_migration_backup_path().is_some());
+        let migrated = Connection::open(&path).expect("migrated connection should open");
+        for table in [
+            "memory_items",
+            "memory_item_embeddings",
+            "memory_extraction_state",
+        ] {
+            assert!(table_exists(&migrated, table).expect("table lookup should work"));
+        }
+        let chats: i64 = migrated
+            .query_row(
+                "SELECT COUNT(1) FROM chats WHERE id = ?1",
+                [&chat.id],
+                |row| row.get(0),
+            )
+            .expect("chat count should resolve");
+        assert_eq!(chats, 1);
+        drop(migrated);
+
+        // A second open is a no-op and keeps stored items.
+        let item = database
+            .create_memory_item(&crate::db::CreateMemoryItemInput {
+                scope: "user".to_string(),
+                character_id: None,
+                chat_id: None,
+                kind: None,
+                content: "Sam likes green tea".to_string(),
+                importance: None,
+                pinned: None,
+                source_message_id: None,
+            })
+            .expect("item should create");
+        drop(database);
+        let reopened = Database::new(path).expect("current schema should reopen");
+        assert!(reopened.last_migration_backup_path().is_none());
+        assert_eq!(
+            reopened
+                .get_memory_item(&item.id)
+                .expect("item should survive")
+                .content,
+            "Sam likes green tea"
+        );
+    }
+
+    #[test]
+    fn backups_carry_memory_items_through_a_restore() {
+        let path = test_db_path("restore-memory-items");
+        let database = Database::new(path).expect("database should initialize");
+        let kept = database
+            .create_memory_item(&crate::db::CreateMemoryItemInput {
+                scope: "user".to_string(),
+                character_id: None,
+                chat_id: None,
+                kind: Some("preference".to_string()),
+                content: "Sam prefers tea over coffee".to_string(),
+                importance: Some(4),
+                pinned: Some(true),
+                source_message_id: None,
+            })
+            .expect("item should create");
+        let backup_path = database
+            .export_backup("manual")
+            .expect("manual backup should export");
+        let backup_name = backup_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("backup name should be UTF-8")
+            .to_string();
+        database
+            .delete_memory_item(&kept.id)
+            .expect("item should delete");
+
+        database
+            .restore_backup(&backup_name)
+            .expect("backup should restore");
+        let restored = database
+            .get_memory_item(&kept.id)
+            .expect("item should come back");
+        assert_eq!(restored.content, "Sam prefers tea over coffee");
+        assert!(restored.pinned);
+        assert_eq!(restored.importance, 4);
     }
 
     #[test]

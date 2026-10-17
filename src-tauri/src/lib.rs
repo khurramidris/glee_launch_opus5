@@ -4,10 +4,13 @@ mod db;
 mod embedding_service;
 mod errors;
 mod gpu_check;
+mod memory_service;
+mod portraits;
 mod resources;
 mod runtime_manager;
 mod runtime_selection;
 mod types;
+mod updates;
 
 use std::{
     collections::HashSet,
@@ -45,15 +48,17 @@ use types::{
     ChatPresetProfileRecord, ChatRecord, ChatRelationshipStateRecord, ContextEntryRecord,
     CreateCharacterInput, CreateChatInput, CreateContextEntryInput, CreateGenerationPresetInput,
     CreateGroupChatInput, CreatePersonaPresetInput, DatabaseBackupRecord, DatabaseBackupResponse,
-    DatabaseRestoreResponse, DiagnosticsExportResponse, DiagnosticsSnapshot, DownloadModelInput,
-    EditAndTruncateInput, ExportCharacterCardJsonInput, ExportCharacterCardPngInput,
-    FeatureExposure, FirstRunPreparationResponse, GenerationPresetRecord, HealthCheckRecord,
-    HealthCheckStatus, ImportCharacterCardInput, ImportModelInput, IndexingDiagnostics,
+    DatabaseRestoreResponse, DeleteMessageInput, DiagnosticsExportResponse, DiagnosticsSnapshot,
+    DownloadModelInput, EditAndTruncateInput, ExportCharacterCardJsonInput,
+    ExportCharacterCardPngInput, ExportDatabaseBackupInput, FeatureExposure,
+    FirstRunPreparationResponse, GenerationPresetRecord, HealthCheckRecord, HealthCheckStatus,
+    ImportCharacterCardInput, ImportDatabaseBackupInput, ImportModelInput, IndexingDiagnostics,
     IndexingHealthStatus, MemorySnippetRecord, MessageRecord, ModelRecord, PersonaPresetRecord,
-    ResolveContextEntriesInput, ResolveMemorySnippetsInput, ResourceStatusResponse,
-    RestoreDatabaseBackupInput, RuntimeLaunchSettingsRecord, RuntimePerformanceMode,
-    RuntimeStatusResponse, StartRuntimeInput, StartupHealthSnapshot, UpdateCharacterInput,
-    UpdateContextEntryInput, UpdateGenerationPresetInput, UpdateGroupChatInput, UpdateMessageInput,
+    RenameChatInput, ResolveContextEntriesInput, ResolveMemorySnippetsInput,
+    ResourceStatusResponse, RestoreDatabaseBackupInput, RuntimeLaunchSettingsRecord,
+    RuntimePerformanceMode, RuntimeStatusResponse, SetChatPersonaInput, StartRuntimeInput,
+    StartupHealthSnapshot, UpdateCharacterInput, UpdateContextEntryInput,
+    UpdateGenerationPresetInput, UpdateGroupChatInput, UpdateMessageInput,
     UpdatePersonaPresetInput, UpdateRuntimeLaunchSettingsInput, UpsertChatMemoryInput,
     UpsertChatPresetProfileInput, UpsertChatRelationshipStateInput, UpsertUserProfileInput,
     UserProfileRecord,
@@ -146,6 +151,7 @@ const MAX_CHARACTER_CARD_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_CHARACTER_CARD_JSON_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CHARACTER_CARD_METADATA_BYTES: usize = 6 * 1024 * 1024;
 const MAX_LOCAL_IMAGE_FILE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_SAVED_TEXT_FILE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DIAGNOSTICS_LOG_EXPORT_BYTES: usize = 5 * 1024 * 1024;
 pub(crate) const GENERATION_FAILURE_PREFIX: &str = "[Glee reply failed]";
 const MODEL_DOWNLOAD_PROGRESS_EVENT: &str = "model-download-progress";
@@ -449,7 +455,9 @@ async fn create_character(
         input.alternate_greetings,
         input.alternate_greetings_json,
     )?;
-    let avatar = input.avatar.map(|value| value.trim().to_string());
+    let avatar = input
+        .avatar
+        .map(|value| portraits::persist_portrait(&state.app_data_dir, &value));
     let tags_json = normalize_tags_json_input(input.tags, input.tags_json)?;
     let likes_json = normalize_string_list_json_input(input.likes, input.likes_json)?;
     let dislikes_json = normalize_string_list_json_input(input.dislikes, input.dislikes_json)?;
@@ -513,7 +521,9 @@ async fn update_character(
         input.alternate_greetings,
         input.alternate_greetings_json,
     )?;
-    let avatar = input.avatar.map(|value| value.trim().to_string());
+    let avatar = input
+        .avatar
+        .map(|value| portraits::persist_portrait(&state.app_data_dir, &value));
     let tags_json = normalize_tags_json_input(input.tags, input.tags_json)?;
     let likes_json = normalize_string_list_json_input(input.likes, input.likes_json)?;
     let dislikes_json = normalize_string_list_json_input(input.dislikes, input.dislikes_json)?;
@@ -892,32 +902,47 @@ async fn resolve_memory_batch<R: tauri::Runtime>(
                     input.limit.unwrap_or(6).clamp(1, 12) as usize,
                     input.speaker_character_id.as_deref(),
                     input.retrieval_hints.as_deref(),
+                    Database::RECALL_EXCLUDED_RECENT_MESSAGES,
                 )
             })
             .collect::<AppResult<Vec<_>>>()
     })
     .await?;
     // One query embedding and one vector lookup serve all responders in this turn.
-    let semantic_hits = resolve_semantic_memory_hits(
+    let retrieval_diagnostics = state.indexing_diagnostics.clone();
+    let semantic_hits = match resolve_semantic_memory_hits(
         app_handle,
-        state.db,
-        state.embedding_service,
-        state.indexing_diagnostics,
+        state.db.clone(),
+        state.embedding_service.clone(),
+        state.indexing_diagnostics.clone(),
         &chat_id,
         &query,
         max_limit.saturating_mul(2).clamp(4, 24),
     )
     .await
-    .unwrap_or_default();
+    {
+        Ok(hits) => hits,
+        Err(error) => {
+            // Lexical recall still answers the turn, but the failure must not vanish.
+            eprintln!("semantic memory retrieval failed: {error}");
+            record_retrieval_failure(&retrieval_diagnostics, &error).await;
+            Vec::new()
+        }
+    };
+    // Remembered items lead; recalled chat messages follow.
+    let item_hits =
+        memory_service::resolve_item_snippets(app_handle, &state, &inputs, &chat_id, &query).await;
     Ok(lexical_hits
         .into_iter()
         .zip(inputs)
-        .map(|(lexical, input)| {
-            merge_memory_snippets(
+        .zip(item_hits)
+        .map(|((lexical, input), mut items)| {
+            items.extend(merge_memory_snippets(
                 lexical,
                 semantic_hits.clone(),
                 input.limit.unwrap_or(6).clamp(1, 12) as usize,
-            )
+            ));
+            items
         })
         .collect())
 }
@@ -929,9 +954,11 @@ async fn import_character_card(
 ) -> AppResult<CharacterRecord> {
     let state = state.handles().await?;
     let path = canonicalize_character_card_path(&input.path)?;
+    let app_data_dir = state.app_data_dir.clone();
 
     run_db_task(state.db.clone(), move |database| {
-        let imported = import_character_card_from_path(&path)?;
+        let mut imported = import_character_card_from_path(&path)?;
+        imported.avatar = portraits::persist_portrait(&app_data_dir, &imported.avatar);
         database.create_character_with_card_passthrough(
             &imported.name,
             Some(&imported.description),
@@ -1007,6 +1034,45 @@ async fn export_character_card_png(
     let encoded = build_png_card_bytes(&source_png, &character)?;
     fs::write(&output_path, encoded)?;
 
+    Ok(CharacterCardExportResponse {
+        path: output_path.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+async fn save_text_file(path: String, content: String) -> AppResult<CharacterCardExportResponse> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(
+            "file path cannot be empty".to_string(),
+        ));
+    }
+    if content.len() > MAX_SAVED_TEXT_FILE_BYTES {
+        return Err(AppError::Validation(format!(
+            "file exceeds the {} MiB size limit",
+            MAX_SAVED_TEXT_FILE_BYTES / (1024 * 1024)
+        )));
+    }
+    let output_path = PathBuf::from(trimmed);
+    let extension = output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(extension.as_deref(), Some("json" | "md" | "txt")) {
+        return Err(AppError::Validation(
+            "file must be a .json, .md, or .txt file".to_string(),
+        ));
+    }
+    let parent_exists = output_path
+        .parent()
+        .is_some_and(|parent| parent.as_os_str().is_empty() || parent.is_dir());
+    if !parent_exists || output_path.is_dir() {
+        return Err(AppError::Validation(format!(
+            "file location is invalid: {}",
+            output_path.display()
+        )));
+    }
+    fs::write(&output_path, content)?;
     Ok(CharacterCardExportResponse {
         path: output_path.to_string_lossy().to_string(),
     })
@@ -1111,6 +1177,34 @@ async fn delete_chat(state: tauri::State<'_, AppState>, chat_id: String) -> AppR
 }
 
 #[tauri::command]
+async fn delete_message(
+    state: tauri::State<'_, AppState>,
+    input: DeleteMessageInput,
+) -> AppResult<ChatHistoryMutationRecord> {
+    let state = state.handles().await?;
+    let message_id = normalize_non_empty(&input.id, "message id")?;
+    let expected_history_epoch = input.expected_history_epoch;
+    run_db_task(state.db.clone(), move |database| {
+        database.delete_message(&message_id, expected_history_epoch)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn rename_chat(
+    state: tauri::State<'_, AppState>,
+    input: RenameChatInput,
+) -> AppResult<ChatRecord> {
+    let state = state.handles().await?;
+    let chat_id = normalize_non_empty(&input.chat_id, "chat id")?;
+    let title = normalize_non_empty(&input.title, "chat title")?;
+    run_db_task(state.db.clone(), move |database| {
+        database.rename_chat(&chat_id, &title)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn clear_chat_history(
     state: tauri::State<'_, AppState>,
     chat_id: String,
@@ -1185,6 +1279,41 @@ async fn upsert_chat_memory(
 }
 
 #[tauri::command]
+async fn get_auto_summary_batch(
+    state: tauri::State<'_, AppState>,
+    chat_id: String,
+) -> AppResult<types::AutoSummaryBatchRecord> {
+    let state = state.handles().await?;
+    let chat_id = normalize_non_empty(&chat_id, "chat id")?;
+    run_db_task(state.db.clone(), move |database| {
+        database.get_auto_summary_batch(&chat_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn store_auto_summary(
+    state: tauri::State<'_, AppState>,
+    input: types::StoreAutoSummaryInput,
+) -> AppResult<Option<ChatMemoryRecord>> {
+    let state = state.handles().await?;
+    let chat_id = normalize_non_empty(&input.chat_id, "chat id")?;
+    let through_message_id = normalize_non_empty(&input.through_message_id, "message id")?;
+    let summary = input.summary;
+    let expected_history_epoch = input.expected_history_epoch;
+
+    run_db_task(state.db.clone(), move |database| {
+        database.store_auto_summary_at_epoch(
+            &chat_id,
+            &summary,
+            &through_message_id,
+            expected_history_epoch,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 async fn get_chat_preset_profile(
     state: tauri::State<'_, AppState>,
     chat_id: String,
@@ -1193,6 +1322,22 @@ async fn get_chat_preset_profile(
     let chat_id = normalize_non_empty(&chat_id, "chat id")?;
     run_db_task(state.db.clone(), move |database| {
         database.get_chat_preset_profile(&chat_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_chat_persona(
+    state: tauri::State<'_, AppState>,
+    input: SetChatPersonaInput,
+) -> AppResult<ChatPresetProfileRecord> {
+    let state = state.handles().await?;
+    let chat_id = normalize_non_empty(&input.chat_id, "chat id")?;
+    let persona_preset_id = input
+        .persona_preset_id
+        .map(|value| value.trim().to_string());
+    run_db_task(state.db.clone(), move |database| {
+        database.set_chat_persona(&chat_id, persona_preset_id.as_deref())
     })
     .await
 }
@@ -1230,7 +1375,9 @@ async fn upsert_user_profile(
     let display_name = input.display_name.map(|value| value.trim().to_string());
     let about = input.about.map(|value| value.trim().to_string());
     let gender = input.gender.map(|value| value.trim().to_string());
-    let avatar = input.avatar.map(|value| value.trim().to_string());
+    let avatar = input
+        .avatar
+        .map(|value| portraits::persist_portrait(&state.app_data_dir, &value));
     let traits_json = normalize_string_list_json_input(input.traits, input.traits_json)?;
     let preferences = input.preferences.map(|value| value.trim().to_string());
     let boundaries = input.boundaries.map(|value| value.trim().to_string());
@@ -1675,6 +1822,36 @@ async fn list_database_backups(
 }
 
 #[tauri::command]
+async fn export_database_backup(
+    state: tauri::State<'_, AppState>,
+    input: ExportDatabaseBackupInput,
+) -> AppResult<DatabaseBackupResponse> {
+    let state = state.handles().await?;
+    let file_name = normalize_non_empty(&input.file_name, "database backup file name")?;
+    let destination = PathBuf::from(normalize_non_empty(&input.path, "backup location")?);
+    let saved = run_db_task(state.db.clone(), move |database| {
+        database.copy_backup_to(&file_name, &destination)
+    })
+    .await?;
+    Ok(DatabaseBackupResponse {
+        path: saved.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+async fn import_database_backup(
+    state: tauri::State<'_, AppState>,
+    input: ImportDatabaseBackupInput,
+) -> AppResult<DatabaseBackupRecord> {
+    let state = state.handles().await?;
+    let source = PathBuf::from(normalize_non_empty(&input.path, "backup file path")?);
+    run_db_maintenance_task(state.db.clone(), move |database| {
+        database.import_backup_file(&source)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn restore_database_backup<R: tauri::Runtime>(
     app_handle: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
@@ -1822,6 +1999,7 @@ async fn resolve_semantic_memory_hits<R: tauri::Runtime>(
             &embedding_model_id,
             &query_embedding,
             limit,
+            Database::RECALL_EXCLUDED_RECENT_MESSAGES,
         )
     })
     .await?;
@@ -1850,9 +2028,10 @@ fn schedule_embedding_backfill<R: tauri::Runtime>(
     tauri::async_runtime::spawn(async move {
         let _reservation = reservation;
         let _worker = service.backfill_slot().await;
-        let result: AppResult<()> = async {
+        // Ok(Some(summary)) means the pass finished but skipped messages that failed.
+        let result: AppResult<Option<String>> = async {
             if service.is_stopped() {
-                return Ok(());
+                return Ok(None);
             }
             let cleanup_chat = chat_id.clone();
             run_db_task(db.clone(), move |database| {
@@ -1860,15 +2039,20 @@ fn schedule_embedding_backfill<R: tauri::Runtime>(
             })
             .await?;
             let mut previous_ids = Vec::new();
+            // One message that cannot be indexed must not block the older ones behind it.
+            let mut skipped_ids: Vec<String> = Vec::new();
+            let mut last_skip_error = String::new();
             while !service.is_stopped() {
                 let model_id = service.index_id();
                 let target_chat = chat_id.clone();
+                let skipped = skipped_ids.clone();
                 let messages = run_db_task(db.clone(), move |database| {
                     database.list_messages_missing_embeddings(
                         &target_chat,
                         &model_id,
                         dimensions,
                         6,
+                        &skipped,
                     )
                 })
                 .await?;
@@ -1895,16 +2079,22 @@ fn schedule_embedding_backfill<R: tauri::Runtime>(
                 .await;
                 for message in messages {
                     if service.is_stopped() {
-                        return Ok(());
+                        return Ok(None);
                     }
                     let id = message.id.clone();
-                    index_single_message_embedding(
+                    if let Err(error) = index_single_message_embedding(
                         &app_handle,
                         db.clone(),
                         service.clone(),
                         message,
                     )
-                    .await?;
+                    .await
+                    {
+                        eprintln!("embedding backfill skipped message {id}: {error}");
+                        last_skip_error = format!("message {id}: {error}");
+                        skipped_ids.push(id);
+                        continue;
+                    }
                     update_indexing_diagnostics(
                         &diagnostics,
                         IndexingHealthStatus::Pending,
@@ -1915,16 +2105,32 @@ fn schedule_embedding_backfill<R: tauri::Runtime>(
                     tokio::task::yield_now().await;
                 }
             }
-            Ok(())
+            Ok(if skipped_ids.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{} message(s) could not be indexed; last failure: {last_skip_error}",
+                    skipped_ids.len()
+                ))
+            })
         }
         .await;
         if !service.is_stopped() {
             match result {
-                Ok(()) => {
+                Ok(None) => {
                     update_indexing_diagnostics(
                         &diagnostics,
                         IndexingHealthStatus::Healthy,
                         None,
+                        None,
+                    )
+                    .await
+                }
+                Ok(Some(summary)) => {
+                    update_indexing_diagnostics(
+                        &diagnostics,
+                        IndexingHealthStatus::Degraded,
+                        Some(summary),
                         None,
                     )
                     .await
@@ -2426,6 +2632,18 @@ fn initial_indexing_diagnostics(
         last_error,
         last_indexed_message_id: None,
     }
+}
+
+// A failed lookup degrades the indexing status without touching which message
+// was indexed last.
+async fn record_retrieval_failure(
+    indexing_diagnostics: &Arc<tokio::sync::Mutex<IndexingDiagnostics>>,
+    error: &AppError,
+) {
+    let mut diagnostics = indexing_diagnostics.lock().await;
+    diagnostics.status = IndexingHealthStatus::Degraded;
+    diagnostics.updated_at = chrono::Utc::now().to_rfc3339();
+    diagnostics.last_error = Some(format!("semantic memory retrieval failed: {error}"));
 }
 
 async fn update_indexing_diagnostics(
@@ -3637,6 +3855,13 @@ pub fn run() {
             prepare_first_run_resources,
             cancel_first_run_provisioning,
             active_first_run_provisioning_job_id,
+            updates::check_for_update,
+            updates::download_update,
+            updates::cancel_update_download,
+            updates::install_update,
+            updates::skip_update_version,
+            updates::get_update_settings,
+            updates::set_update_settings,
             bootstrap_state,
             list_models,
             import_model,
@@ -3662,22 +3887,35 @@ pub fn run() {
             resolve_context_entries,
             resolve_memory_snippets,
             resolve_memory_snippets_batch,
+            memory_service::list_memory_items,
+            memory_service::create_memory_item,
+            memory_service::update_memory_item,
+            memory_service::delete_memory_item,
+            memory_service::delete_memory_items_for,
+            memory_service::get_memory_extraction_batch,
+            memory_service::store_memory_extraction,
             import_character_card,
             export_character_card_json,
             export_character_card_png,
             read_local_image_data_url,
+            save_text_file,
             list_chats,
             create_chat,
             create_group_chat,
             update_group_chat,
             delete_chat,
             clear_chat_history,
+            delete_message,
+            rename_chat,
             list_chat_participants,
             list_messages,
             get_chat_memory,
             upsert_chat_memory,
+            get_auto_summary_batch,
+            store_auto_summary,
             get_chat_preset_profile,
             upsert_chat_preset_profile,
+            set_chat_persona,
             get_user_profile,
             upsert_user_profile,
             get_chat_relationship_state,
@@ -3695,7 +3933,9 @@ pub fn run() {
             export_diagnostics_bundle,
             create_database_backup,
             list_database_backups,
-            restore_database_backup
+            restore_database_backup,
+            export_database_backup,
+            import_database_backup
         ])
         .build(tauri::generate_context!())
         .expect("error while building the Glee application");
@@ -3912,6 +4152,59 @@ mod tests {
         .expect("warmup setting should load")
         .expect("warmup setting should exist");
         assert_eq!(warmup_setting.value, "false");
+    }
+
+    fn memory_hit(id: &str, score: i64) -> MemorySnippetRecord {
+        MemorySnippetRecord {
+            message_id: id.to_string(),
+            chat_id: "chat".to_string(),
+            role: "user".to_string(),
+            content: format!("content of {id}"),
+            speaker_character_id: None,
+            created_at: "2000-01-01T00:00:00Z".to_string(),
+            score,
+        }
+    }
+
+    #[test]
+    fn merged_memory_ranks_strong_lexical_hits_above_weak_semantic_ones() {
+        let merged = merge_memory_snippets(
+            vec![memory_hit("lexical-strong", 120)],
+            vec![
+                memory_hit("semantic-weak", 62),
+                memory_hit("semantic-good", 100),
+            ],
+            6,
+        );
+
+        let order = merged
+            .iter()
+            .map(|hit| hit.message_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            vec!["lexical-strong", "semantic-good", "semantic-weak"]
+        );
+    }
+
+    #[test]
+    fn merged_memory_boosts_hits_found_by_both_searches_and_respects_the_limit() {
+        let merged = merge_memory_snippets(
+            vec![memory_hit("shared", 70), memory_hit("lexical-only", 90)],
+            vec![memory_hit("shared", 100), memory_hit("semantic-only", 95)],
+            2,
+        );
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].message_id, "shared");
+        assert!(merged[0].score > 100);
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|hit| hit.message_id == "shared")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -4416,6 +4709,8 @@ mod tests {
                 limit,
                 speaker_character_id.as_deref(),
                 retrieval_hints.as_deref(),
+                // The smoke chat is shorter than the recent-message window.
+                0,
             )
         })
         .await?;

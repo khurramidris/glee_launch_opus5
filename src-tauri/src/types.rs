@@ -72,6 +72,10 @@ pub struct ChatRecord {
 pub struct ChatMemoryRecord {
     pub chat_id: String,
     pub summary: String,
+    #[serde(default)]
+    pub summary_auto: bool,
+    #[serde(default)]
+    pub summarized_through_message_id: Option<String>,
     pub facts_json: String,
     #[serde(default)]
     pub facts: Vec<String>,
@@ -79,10 +83,38 @@ pub struct ChatMemoryRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoSummaryBatchRecord {
+    pub chat_id: String,
+    pub history_epoch: i64,
+    pub writable: bool,
+    pub previous_summary: String,
+    pub summarized_through_message_id: Option<String>,
+    pub pending_count: i64,
+    pub messages: Vec<MessageRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreAutoSummaryInput {
+    pub chat_id: String,
+    pub summary: String,
+    pub through_message_id: String,
+    #[serde(default)]
+    pub expected_history_epoch: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatPresetProfileRecord {
     pub chat_id: String,
     pub generation_preset_id: String,
+    #[serde(default)]
+    pub persona_preset_id: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetChatPersonaInput {
+    pub chat_id: String,
+    pub persona_preset_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +243,9 @@ pub struct ResourceStatusResponse {
     pub platform: String,
     pub platform_supported: bool,
     pub missing_required_bytes: u64,
+    /// Bytes of the missing required files already on disk from an interrupted download.
+    #[serde(default)]
+    pub partial_required_bytes: u64,
     pub items: Vec<ResourceItemStatus>,
 }
 
@@ -308,6 +343,18 @@ pub struct ChatHistoryMutationRecord {
     pub history_epoch: i64,
     pub updated_at: String,
     pub messages: Vec<MessageRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteMessageInput {
+    pub id: String,
+    pub expected_history_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameChatInput {
+    pub chat_id: String,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -669,6 +716,17 @@ pub struct DatabaseBackupRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestoreDatabaseBackupInput {
     pub file_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportDatabaseBackupInput {
+    pub file_name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportDatabaseBackupInput {
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

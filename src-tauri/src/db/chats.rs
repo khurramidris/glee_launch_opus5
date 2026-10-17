@@ -481,7 +481,7 @@ impl Database {
             transaction.execute(
                 "
                 INSERT INTO chat_memory (chat_id, summary, facts_json, updated_at)
-                SELECT ?1, summary, facts_json, ?2
+                SELECT ?1, CASE WHEN summary_auto = 1 THEN '' ELSE summary END, facts_json, ?2
                 FROM chat_memory
                 WHERE chat_id = ?3
                 ",

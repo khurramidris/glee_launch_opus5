@@ -22,7 +22,8 @@ Get the latest installer from the [Releases](../../releases/latest) page.
 
 Install it like any other app. The first time Glee opens, it downloads its AI
 model and engine once (about 1.3 GB). After that, Glee works without an
-internet connection.
+internet connection. Glee tells you when a new version is out and can
+download it for you (turn this off under **Settings → Updates**).
 
 **Computer requirements:** 8 GB of RAM and about 3 GB of free disk space.
 A dedicated graphics card or an Apple Silicon Mac makes replies faster but is
@@ -38,13 +39,17 @@ not required.
 - **Characters:** create characters with a personality, backstory, scenario,
   greeting, and example dialogue, or import character cards (JSON or PNG, V2
   and V3).
-- **Personas:** decide who you are in each conversation.
+- **Personas:** save other versions of yourself and pick who you are in each
+  chat.
 - **Group chats:** put several characters in one scene; Glee keeps track of
   who is speaking.
-- **Memory:** characters remember what matters from earlier in the chat.
-- **Branching and editing:** regenerate replies, edit messages, and branch a
-  conversation to try another direction.
-- **Backups:** export and restore your data from Settings.
+- **Memory:** characters remember what matters from earlier in the chat, and
+  long chats keep an automatic summary.
+- **Branching and editing:** regenerate replies, edit or delete messages, and
+  branch a conversation to try another direction.
+- **AI controls:** see which model is running, switch or add `.gguf` models,
+  and pause the AI, all from Settings.
+- **Backups:** back up, save a copy anywhere, and restore from Settings.
 
 ## Privacy
 

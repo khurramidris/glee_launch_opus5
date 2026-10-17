@@ -417,13 +417,41 @@ impl Resources {
             .map(|item| item.size_bytes)
             .sum();
         let ready = platform_supported && items.iter().all(|item| item.installed || item.optional);
+        let partial_required_bytes = self
+            .required_sources()
+            .iter()
+            .zip(items.iter())
+            .filter(|(_, item)| !item.installed && !item.optional)
+            .map(|(source, _)| self.partial_bytes(source))
+            .sum();
         ResourceStatusResponse {
             ready,
             platform: self.platform.clone(),
             platform_supported,
             missing_required_bytes,
+            partial_required_bytes,
             items,
         }
+    }
+
+    /// Download sources in the same order as the items `status` reports.
+    fn required_sources(&self) -> Vec<&DownloadSource> {
+        let mut sources = Vec::new();
+        for role in [ModelRole::Chat, ModelRole::Embedding] {
+            sources.push(&self.manifest.model_for(role, &self.platform).source);
+        }
+        for runtime in self.manifest.runtimes_for(&self.platform) {
+            sources.push(&runtime.source);
+        }
+        sources
+    }
+
+    /// Size of the unfinished download for `source` left by an earlier session.
+    fn partial_bytes(&self, source: &DownloadSource) -> u64 {
+        let complete = format!("{}-{}", &source.sha256()[..16], source.file_name);
+        fs::metadata(self.downloads_dir().join(format!("{complete}.part")))
+            .map(|metadata| metadata.len().min(source.size_bytes))
+            .unwrap_or(0)
     }
 
     fn record_path(&self) -> PathBuf {
@@ -1215,6 +1243,17 @@ async fn download_attempt(
         .await
         .map_err(|error| DownloadFailure::fatal(error.to_string()))?;
     let mut received = offset;
+    if resumed {
+        // Show the bytes kept from before right away, so a resumed download
+        // continues from where it stopped instead of appearing to start over.
+        let mut event = job.event(ProvisioningPhase::Downloading);
+        event.current_file = Some(label.to_string());
+        event.file_bytes = offset;
+        event.file_total_bytes = Some(expected_size);
+        event.aggregate_bytes = job.completed_bytes.saturating_add(offset);
+        event.retry_count = retry_count;
+        job.emit(event);
+    }
     let mut last_emit = Instant::now() - PROGRESS_EVENT_INTERVAL;
     while let Some(chunk) = response.chunk().await.map_err(classify_request_error)? {
         if job.job.cancelled.load(Ordering::Acquire) {
@@ -1716,7 +1755,11 @@ mod tests {
     struct TestServer {
         base: String,
         hits: Arc<AtomicUsize>,
+        /// Every request as (path, requested range start).
+        requests: Arc<Mutex<Vec<RequestLog>>>,
     }
+
+    type RequestLog = (String, Option<usize>);
 
     impl TestServer {
         fn start(files: Vec<(String, Vec<u8>)>, fail_first: bool) -> Self {
@@ -1727,14 +1770,17 @@ mod tests {
             );
             let files = Arc::new(files);
             let hits = Arc::new(AtomicUsize::new(0));
+            let requests = Arc::new(Mutex::new(Vec::new()));
             let failed = Arc::new(Mutex::new(std::collections::HashSet::new()));
             let server_hits = hits.clone();
+            let server_requests = requests.clone();
             thread::spawn(move || {
                 for stream in listener.incoming() {
                     let Ok(mut stream) = stream else { continue };
                     let files = files.clone();
                     let failed = failed.clone();
                     let hits = server_hits.clone();
+                    let requests = server_requests.clone();
                     thread::spawn(move || {
                         let mut reader = BufReader::new(stream.try_clone().unwrap());
                         let mut request_line = String::new();
@@ -1760,6 +1806,7 @@ mod tests {
                             }
                         }
                         hits.fetch_add(1, Ordering::SeqCst);
+                        requests.lock().unwrap().push((path.clone(), range_start));
                         let Some((_, body)) = files.iter().find(|(name, _)| *name == path) else {
                             let _ = stream.write_all(
                                 b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -1793,7 +1840,11 @@ mod tests {
                     });
                 }
             });
-            Self { base, hits }
+            Self {
+                base,
+                hits,
+                requests,
+            }
         }
     }
 
@@ -2079,6 +2130,72 @@ mod tests {
         let again = block_on(resources.prepare(&RecordingSink(Mutex::new(Vec::new())))).unwrap();
         assert_eq!(again.downloaded_assets, 0);
         assert_eq!(server.hits.load(Ordering::SeqCst), hits_before);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_new_session_resumes_the_partial_download_left_by_an_earlier_one() {
+        let _serial = prepare_lock();
+        let chat = b"chat model bytes ".repeat(4096);
+        let embed = b"embedding model".repeat(512);
+        let cpu = tar_gz_with_symlink();
+        let gpu = zip_bytes();
+        let files: Vec<(&str, &[u8])> = vec![
+            ("chat.gguf", &chat),
+            ("embed.gguf", &embed),
+            ("runtime-cpu.tar.gz", &cpu),
+            ("runtime-gpu.zip", &gpu),
+        ];
+        let server = TestServer::start(
+            files
+                .iter()
+                .map(|(name, bytes)| (format!("upstream/{name}"), bytes.to_vec()))
+                .collect(),
+            false,
+        );
+        let manifest = ResourceManifest::parse(&manifest_json(&server.base, &[], &files)).unwrap();
+        let root = temp_dir("restart-resume");
+
+        // What an earlier session leaves behind when the app is closed
+        // mid-download: the first part of the model in a `.part` file.
+        let downloads = root.join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let already = chat.len() / 3;
+        let part = downloads.join(format!("{}-chat.gguf.part", &sha_of(&chat)[..16]));
+        fs::write(&part, &chat[..already]).unwrap();
+
+        let resources = Resources::with_manifest(root.clone(), manifest, "test-x64".into());
+        assert_eq!(resources.status().partial_required_bytes, already as u64);
+        let sink = RecordingSink(Mutex::new(Vec::new()));
+        block_on(resources.prepare(&sink)).expect("prepare should resume and finish");
+        assert_eq!(resources.status().partial_required_bytes, 0);
+
+        let chat_path = resources.installed_model_path(ModelRole::Chat).unwrap();
+        assert_eq!(
+            fs::read(chat_path).unwrap(),
+            chat,
+            "resumed file must be intact"
+        );
+        let requests = server.requests.lock().unwrap();
+        let chat_requests = requests
+            .iter()
+            .filter(|(path, _)| path == "upstream/chat.gguf")
+            .collect::<Vec<_>>();
+        assert_eq!(chat_requests.len(), 1);
+        assert_eq!(
+            chat_requests[0].1,
+            Some(already),
+            "only the missing part should be requested"
+        );
+        // The first progress report already counts the bytes kept from before.
+        let events = sink.0.lock().unwrap();
+        let resumed_event = events
+            .iter()
+            .find(|event| {
+                event.phase == ProvisioningPhase::Downloading && event.file_bytes == already as u64
+            })
+            .expect("progress should start from the bytes already on disk");
+        assert!(resumed_event.aggregate_bytes >= already as u64);
         fs::remove_dir_all(root).ok();
     }
 

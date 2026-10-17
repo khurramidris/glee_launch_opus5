@@ -7,6 +7,7 @@ import {
 } from "./group-regression-corpus";
 import { buildResponseDiagnosticsInspection } from "./diagnostics";
 import { prepareResponseRequest } from "./prepare";
+import { TURN_NOTES_CLOSE, TURN_NOTES_OPEN } from "../runtime-adapters/llama";
 
 function prepareScenario(
   scenarioId: string,
@@ -39,6 +40,13 @@ function prepareScenario(
   });
 }
 
+function turnNotesOf(prepared: ReturnType<typeof prepareScenario>): string {
+  const latest = prepared.runtimeRequest.messages[prepared.runtimeRequest.messages.length - 1]?.content ?? "";
+  return latest.startsWith(TURN_NOTES_OPEN)
+    ? latest.slice(TURN_NOTES_OPEN.length, latest.indexOf(TURN_NOTES_CLOSE)).trim()
+    : "";
+}
+
 describe("group regression corpus", () => {
   it("prepares every regression scenario with structured same-round state", () => {
     for (const scenario of GROUP_REGRESSION_SCENARIOS) {
@@ -46,9 +54,7 @@ describe("group regression corpus", () => {
       const assistantCount = scenario.history.filter(
         (message) => message.role === "assistant",
       ).length;
-      const groupSection = prepared.compiledPrompt.systemSections.find(
-        (section) => section.key === "group_round_state",
-      );
+      const notes = turnNotesOf(prepared);
       const inspection = buildResponseDiagnosticsInspection(prepared);
 
       expect(prepared.groupRoundState).not.toBeNull();
@@ -60,8 +66,7 @@ describe("group regression corpus", () => {
       expect(prepared.groupRoundState?.currentSpeakerObligations.length).toBeGreaterThan(0);
       expect(prepared.groupRoundState?.currentSocialBeat.length).toBeGreaterThan(0);
       expect(prepared.groupRoundState?.expectedSocialMove.length).toBeGreaterThan(0);
-      expect(groupSection?.content).toContain("Roster order:");
-      expect(groupSection?.content).toContain("Current speaker obligations:");
+      expect(notes.length).toBeLessThanOrEqual(700);
       expect(inspection.context.mode).toBe("group");
       expect(inspection.context.speakerName).toBe(scenario.characters.find(
         (character) => character.id === scenario.targetSpeakerId,
@@ -79,13 +84,14 @@ describe("group regression corpus", () => {
         assistantCount,
       );
       expect(inspection.prompt.systemSections.some(
-        (section) => section.key === "group_round_state",
+        (section) => section.key === "system_contract",
       )).toBe(true);
       expect(JSON.stringify(inspection.prompt.runtimeMessages)).not.toContain(
         "Previous group reply",
       );
       if (assistantCount > 0) {
-        expect(groupSection?.content).toContain("Earlier replies this round:");
+        expect(notes).toMatch(/ already said: /);
+        expect(notes).toContain("Do not repeat them; add your own angle.");
       }
     }
   });
@@ -128,9 +134,7 @@ describe("group regression corpus", () => {
 
   it("treats non-targeted speakers as observers when the user addresses someone else", () => {
     const prepared = prepareScenario("fine_dining_observer_reaction");
-    const groupSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "group_round_state",
-    );
+    const notes = turnNotesOf(prepared);
 
     expect(prepared.groupRoundState?.addressedParticipants).toEqual(["Pooja"]);
     expect(prepared.groupRoundState?.latestUserSocialTone).toBe("provocative");
@@ -143,20 +147,15 @@ describe("group regression corpus", () => {
     );
     expect(prepared.reactionPlan.primaryGoal).toMatch(/observing participant/i);
     expect(prepared.reactionPlan.forbiddenMoves.join(" ")).toMatch(/stale practical topic/i);
-    expect(groupSection?.content).toContain(
-      "The user's latest line appears to address: Pooja",
+    expect(notes).toContain(
+      "John Smith is talking to Pooja, not to you. React as a listener in the room; do not answer for them.",
     );
-    expect(groupSection?.content).toContain("Latest user social tone: provocative");
-    expect(groupSection?.content).toContain(
-      "Current speaker position: observer_to_other_address",
-    );
+    expect(notes).toContain("John Smith's tone is provocative; answer that tone in character.");
   });
 
-  it("surfaces the live topic for observer turns instead of leaving it implicit", () => {
+  it("keeps the live topic and the user's choice visible for observer turns", () => {
     const prepared = prepareScenario("supermarket_observer_topic_grounding");
-    const groupSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "group_round_state",
-    );
+    const notes = turnNotesOf(prepared);
 
     expect(prepared.groupRoundState?.addressedParticipants).toEqual(["Pooja"]);
     expect(prepared.groupRoundState?.currentSpeakerRole).toBe("observer_to_other_address");
@@ -170,15 +169,14 @@ describe("group regression corpus", () => {
     expect(prepared.reactionPlan.forbiddenMoves.join(" ")).toMatch(
       /out of nowhere/i,
     );
-    expect(groupSection?.content).toContain("Current topic on the floor:");
-    expect(groupSection?.content).toContain("Expected social move:");
+    expect(notes).toContain("John Smith's choice: parmesan cheese.");
+    expect(notes).toContain("not to you");
+    expect(notes).toContain("Scene now: We are standing in a supermarket.");
   });
 
   it("detects mid-clause direct address and marks earlier roster speakers as observers", () => {
     const prepared = prepareScenario("music_driver_direct_address");
-    const groupSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "group_round_state",
-    );
+    const notes = turnNotesOf(prepared);
 
     expect(prepared.groupRoundState?.addressedParticipants).toEqual(["Lara Lightland"]);
     expect(prepared.groupRoundState?.currentSpeakerRole).toBe("observer_to_other_address");
@@ -190,9 +188,7 @@ describe("group regression corpus", () => {
     expect(prepared.reactionPlan.forbiddenMoves.join(" ")).toMatch(
       /driver|addressee/i,
     );
-    expect(groupSection?.content).toContain(
-      "The user's latest line appears to address: Lara Lightland",
-    );
+    expect(notes).toContain("John Smith is talking to Lara Lightland, not to you.");
   });
 
   it("flags later-speaker copying of earlier same-round wording", () => {

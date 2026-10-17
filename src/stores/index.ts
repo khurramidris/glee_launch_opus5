@@ -7,3 +7,6 @@ export { useContextStore, contextStore } from "./context-store";
 export { useDiagnosticsStore, diagnosticsStore } from "./diagnostics-store";
 export { useRuntimeSettingsStore, runtimeSettingsStore } from "./runtime-settings-store";
 export { useProfileStore, profileStore } from "./profile-store";
+export { usePersonaStore, personaStore } from "./persona-store";
+export { useMemoryStore, memoryStore } from "./memory-store";
+export { useUpdateStore, updateStore } from "./update-store";

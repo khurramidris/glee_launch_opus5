@@ -105,6 +105,11 @@ const prepared: PreparedResponseRequest = {
     messages: [],
     stream: true,
   },
+  buildRuntimeRequest: () => ({
+    model: "test-model",
+    messages: [],
+    stream: true,
+  }),
 };
 
 describe("finalizeResponseOutput", () => {
@@ -269,10 +274,10 @@ describe("finalizeResponseOutput", () => {
     expect(result.finalReply).toBe("Priyanka has no response yet.");
   });
 
-  it("rejects the reply when repair still fails validation", async () => {
+  it("keeps the best available attempt when repair still fails validation", async () => {
     const repair = vi
       .fn<(_: string) => Promise<string>>()
-      .mockResolvedValue("I understand. How can I help you today?");
+      .mockResolvedValue("I understand your request. How can I help you today?");
 
     const result = await finalizeResponseOutput({
       rawOutput: "Put your hands up. Do not move.",
@@ -280,13 +285,13 @@ describe("finalizeResponseOutput", () => {
       repair,
     });
 
-    expect(result.accepted).toBe(false);
+    expect(result.accepted).toBe(true);
     expect(result.repaired).toBe(false);
     expect(result.retryRequested).toBe(true);
     expect(result.reasons).toContain("user_echo");
     expect(result.reasons).toContain("policy_retry_requested");
     expect(result.reasons).toContain("repair_failed");
-    expect(result.finalReply).toBe("");
+    expect(result.finalReply).toBe("Put your hands up. Do not move.");
     expect(result.qualityScore).toBeLessThan(1);
   });
 
@@ -749,5 +754,247 @@ describe("finalizeResponseOutput", () => {
     expect(result.accepted).toBe(true);
     expect(result.repaired).toBe(true);
     expect(result.finalReply).toContain("bleeding");
+  });
+
+  describe("best-available policy after a failed repair", () => {
+    const groupPrepared: PreparedResponseRequest = {
+      ...prepared,
+      context: {
+        ...prepared.context,
+        mode: "group",
+        latestUserMessage: "What do you think we should do about the gate?",
+        speaker: { ...prepared.context.speaker!, name: "Lara" },
+        participantNames: ["Lara", "Yulian"],
+      },
+    };
+
+    it("shows a repeated-opening reply when the repair cannot fix it", async () => {
+      const opening = "I keep my hands where you can see them, but";
+      const repair = vi
+        .fn<(_: string) => Promise<string>>()
+        .mockResolvedValue(`${opening} I am watching the door and the stairs.`);
+
+      const result = await finalizeResponseOutput({
+        rawOutput: `${opening} I am watching the door.`,
+        prepared: {
+          ...prepared,
+          context: {
+            ...prepared.context,
+            latestUserMessage: "What now?",
+            history: [
+              {
+                id: "assistant-1",
+                chatId: "chat-1",
+                role: "assistant",
+                content: `${opening} this does not mean I trust you.`,
+                createdAt: "",
+              },
+            ],
+          },
+        },
+        repair,
+      });
+
+      expect(repair).toHaveBeenCalledOnce();
+      expect(result.accepted).toBe(true);
+      expect(result.reasons).toContain("repeated_opening");
+      expect(result.reasons).toContain("repair_failed");
+      expect(result.finalReply).toContain("watching the door");
+    });
+
+    it("accepts a group reply that only repeats an opening after repair throws", async () => {
+      const opening = "I keep my hands where you can see them, but";
+      const repair = vi
+        .fn<(_: string) => Promise<string>>()
+        .mockRejectedValue(new Error("repair timed out"));
+
+      const result = await finalizeResponseOutput({
+        rawOutput: `${opening} I am watching the door.`,
+        prepared: {
+          ...groupPrepared,
+          context: {
+            ...groupPrepared.context,
+            history: [
+              {
+                id: "assistant-1",
+                chatId: "chat-1",
+                role: "assistant",
+                content: `${opening} this does not mean I trust you.`,
+                createdAt: "",
+              },
+            ],
+          },
+        },
+        repair,
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(result.reasons).toContain("repeated_opening");
+      expect(result.reasons).toContain("repair_failed");
+    });
+
+    it("prefers the higher-scoring attempt, including the repaired one", async () => {
+      const repair = vi
+        .fn<(_: string) => Promise<string>>()
+        .mockResolvedValue("Put your hands up. Do not move, and keep your voice down.");
+
+      const result = await finalizeResponseOutput({
+        rawOutput:
+          "I understand your request. Put your hands up. Do not move. How can I help?",
+        prepared,
+        repair,
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(result.repaired).toBe(true);
+      expect(result.reasons).toContain("repair_applied");
+      expect(result.finalReply).toContain("keep your voice down");
+    });
+
+    it("still rejects genuinely broken output after a failed repair", async () => {
+      for (const rawOutput of [
+        "As the character, I would answer kindly and ask about the harbor today.",
+        "Sit down, <PLAYER_NAME>, and tell me what happened at the harbor.",
+      ]) {
+        const repair = vi
+          .fn<(_: string) => Promise<string>>()
+          .mockResolvedValue(rawOutput);
+
+        const result = await finalizeResponseOutput({ rawOutput, prepared, repair });
+
+        expect(result.accepted, rawOutput).toBe(false);
+        expect(result.finalReply, rawOutput).not.toContain("harbor");
+      }
+    });
+
+    it("rejects an impersonating group reply after a failed repair", async () => {
+      const impersonation =
+        "Yulian nods and walks to the gate. The gate creaks open for the whole group.";
+      const repair = vi
+        .fn<(_: string) => Promise<string>>()
+        .mockResolvedValue(impersonation);
+
+      const result = await finalizeResponseOutput({
+        rawOutput: impersonation,
+        prepared: groupPrepared,
+        repair,
+      });
+
+      expect(result.accepted).toBe(false);
+      expect(result.reasons).toContain("other_participant_impersonation");
+    });
+
+    it("accepts a non-fatal group original when the repair comes back unusable", async () => {
+      const reply = "I keep my hands where you can see them, but I am watching the door.";
+      const repair = vi
+        .fn<(_: string) => Promise<string>>()
+        .mockResolvedValue('Riley: "Stay down."');
+
+      const result = await finalizeResponseOutput({
+        rawOutput: reply,
+        prepared: {
+          ...groupPrepared,
+          context: {
+            ...groupPrepared.context,
+            latestUserMessage: "What now?",
+            history: [
+              {
+                id: "assistant-1",
+                chatId: "chat-1",
+                role: "assistant",
+                content:
+                  "I keep my hands where you can see them, but this does not mean I trust you.",
+                createdAt: "",
+              },
+            ],
+          },
+        },
+        repair,
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(result.finalReply).toBe(reply);
+      expect(result.reasons).toContain("repair_failed");
+      expect(result.reasons).not.toContain("fallback_used");
+    });
+  });
+
+  describe("truncated output", () => {
+    it("trims a reply cut by the token limit to its last complete sentence", async () => {
+      const repair = vi.fn<(_: string) => Promise<string>>();
+
+      const result = await finalizeResponseOutput({
+        rawOutput:
+          "Easy. I'm lifting my hands, but keep that rifle steady. And if you so much as twitch toward the",
+        truncated: true,
+        prepared,
+        repair,
+      });
+
+      expect(repair).not.toHaveBeenCalled();
+      expect(result.accepted).toBe(true);
+      expect(result.reasons).not.toContain("incomplete_sentence");
+      expect(result.finalReply).toBe("Easy. I'm lifting my hands, but keep that rifle steady.");
+    });
+
+    it("closes a dialogue quote left open by truncation without calling it incomplete", async () => {
+      const result = await finalizeResponseOutput({
+        rawOutput:
+          '*She lowers the lantern.* "We should leave before dawn. The road floods when the tide turns and',
+        truncated: true,
+        prepared,
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(result.finalReply).toBe(
+        'She lowers the lantern. "We should leave before dawn."',
+      );
+    });
+
+    it("does not start a repair just because the reply was truncated", async () => {
+      const repair = vi
+        .fn<(_: string) => Promise<string>>()
+        .mockResolvedValue("Easy. I'm lifting my hands, but keep that rifle steady.");
+
+      const truncated = await finalizeResponseOutput({
+        rawOutput: "I was just going to",
+        truncated: true,
+        prepared,
+        repair,
+      });
+
+      expect(repair).not.toHaveBeenCalled();
+      expect(truncated.accepted).toBe(true);
+      expect(truncated.finalReply).toBe("I was just going to");
+
+      // The same text from a reply that ended on its own is a genuine fragment.
+      const finished = await finalizeResponseOutput({
+        rawOutput: "I was just going to",
+        prepared,
+        repair,
+      });
+
+      expect(repair).toHaveBeenCalledOnce();
+      expect(finished.reasons).toContain("policy_retry_requested");
+    });
+
+    it("applies the same handling to a truncated repair attempt", async () => {
+      const repair = vi
+        .fn<(_: string) => Promise<{ content: string; truncated: boolean }>>()
+        .mockResolvedValue({
+          content: "Easy. I'm lifting my hands, but keep that rifle steady. If you move, I will",
+          truncated: true,
+        });
+
+      const result = await finalizeResponseOutput({
+        rawOutput: "Put your hands up. Do not move.",
+        prepared,
+        repair,
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(result.repaired).toBe(true);
+      expect(result.finalReply).toBe("Easy. I'm lifting my hands, but keep that rifle steady.");
+    });
   });
 });

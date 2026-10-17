@@ -7,10 +7,7 @@ import {
   updateContextEntry,
   upsertChatMemory,
 } from "../../api/tauri";
-import {
-  createRollingSummary,
-  extractMemoryFacts,
-} from "../../lib/chat-domain";
+import { extractMemoryFacts } from "../../lib/chat-domain";
 import {
   useAppStore,
   useCharacterStore,
@@ -45,16 +42,6 @@ export function useContextMemory() {
     [activeCharacterId, characters],
   );
 
-  const memorySpeakerDirectory = useMemo(
-    () =>
-      Object.fromEntries(
-        characters
-          .map((character) => [character.id, character.name.trim()] as const)
-          .filter((entry) => Boolean(entry[1])),
-      ),
-    [characters],
-  );
-
   const loadContextEntries = useCallback(async () => {
     const entries = await listContextEntries(activeCharacter?.id);
     setContextEntries(entries);
@@ -66,13 +53,13 @@ export function useContextMemory() {
       history: ChatMessage[] = [],
       expectedHistoryEpoch?: number,
     ) => {
-      const summary = createRollingSummary(history, memorySpeakerDirectory);
+      // The summary is owned by the background summariser (or the user); this
+      // refresh only maintains the extracted facts.
       const facts = extractMemoryFacts(history);
       try {
         setSavingMemory(true);
         const updated = await upsertChatMemory({
           chatId,
-          summary,
           facts,
           expectedHistoryEpoch,
         });
@@ -81,7 +68,7 @@ export function useContextMemory() {
         setSavingMemory(false);
       }
     },
-    [memorySpeakerDirectory, setMemoryByChat, setSavingMemory],
+    [setMemoryByChat, setSavingMemory],
   );
 
   const refreshMemory = useCallback(async () => {

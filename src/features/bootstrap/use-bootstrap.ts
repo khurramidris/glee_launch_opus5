@@ -94,10 +94,14 @@ async function ensureAiResources(): Promise<boolean> {
   }
 
   const total = status?.missingRequiredBytes ?? 0;
+  const alreadyDownloaded = Math.min(status?.partialRequiredBytes ?? 0, total);
   setBootOverlayText({
-    subtitle: total
-      ? `Setting up Glee. This one-time download is about ${formatBytes(total)}.`
-      : "Setting up Glee.",
+    subtitle:
+      alreadyDownloaded > 0
+        ? `Resuming your download. ${formatBytes(alreadyDownloaded)} of ${formatBytes(total)} is already on this computer.`
+        : total
+          ? `Setting up Glee. This one-time download is about ${formatBytes(total)}.`
+          : "Setting up Glee.",
     detail: "",
   });
   const meter = new TransferRateMeter();
@@ -206,7 +210,7 @@ export function useBootstrap(): void {
           setNotice({
             kind: "error",
             message:
-              "Glee's AI isn't installed yet, so characters can't reply. Restart Glee when you're online to finish setup.",
+              "Glee's AI isn't installed yet, so characters can't reply. Use Download now at the top of the window when you're online; anything already downloaded is kept.",
           });
         }
         setActiveCharacterId(snapshot.characters[0]?.id ?? null);

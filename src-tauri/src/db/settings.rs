@@ -26,6 +26,21 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 
+    pub fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(AppError::Validation(
+                "setting key cannot be empty".to_string(),
+            ));
+        }
+
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        super::upsert_setting_tx(&transaction, key, value, &super::now_rfc3339())?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn get_setting(&self, key: &str) -> AppResult<Option<AppSettingRecord>> {
         let key = key.trim();
         if key.is_empty() {

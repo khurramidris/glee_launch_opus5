@@ -314,7 +314,7 @@ impl Database {
 
         let record = connection
             .query_row(
-                "SELECT chat_id, generation_preset_id, updated_at FROM chat_preset_profiles WHERE chat_id = ?1",
+                "SELECT chat_id, generation_preset_id, updated_at, persona_preset_id FROM chat_preset_profiles WHERE chat_id = ?1",
                 [id],
                 map_chat_preset_profile_row,
             )
@@ -323,8 +323,65 @@ impl Database {
         Ok(record.unwrap_or(ChatPresetProfileRecord {
             chat_id: id.to_string(),
             generation_preset_id: String::new(),
+            persona_preset_id: String::new(),
             updated_at: String::new(),
         }))
+    }
+
+    /// Chooses which saved persona the user plays in a chat; `None` means the default profile.
+    pub fn set_chat_persona(
+        &self,
+        chat_id: &str,
+        persona_preset_id: Option<&str>,
+    ) -> AppResult<ChatPresetProfileRecord> {
+        let id = chat_id.trim();
+        if id.is_empty() {
+            return Err(AppError::Validation("chat id cannot be empty".to_string()));
+        }
+        let clean_persona_id = persona_preset_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction()?;
+        let chat_exists: i64 =
+            transaction.query_row("SELECT COUNT(1) FROM chats WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })?;
+        if chat_exists == 0 {
+            return Err(AppError::NotFound(format!("chat {id} was not found")));
+        }
+        if let Some(persona_id) = clean_persona_id.as_deref() {
+            let persona_exists: i64 = transaction.query_row(
+                "SELECT COUNT(1) FROM persona_presets WHERE id = ?1",
+                [persona_id],
+                |row| row.get(0),
+            )?;
+            if persona_exists == 0 {
+                return Err(AppError::NotFound(format!(
+                    "persona {persona_id} was not found"
+                )));
+            }
+        }
+
+        transaction.execute(
+            "
+            INSERT INTO chat_preset_profiles (chat_id, persona_preset_id, generation_preset_id, updated_at)
+            VALUES (?1, ?2, NULL, ?3)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                persona_preset_id = excluded.persona_preset_id,
+                updated_at = excluded.updated_at
+            ",
+            params![id, clean_persona_id.as_deref(), now_rfc3339()],
+        )?;
+        let record = transaction.query_row(
+            "SELECT chat_id, generation_preset_id, updated_at, persona_preset_id FROM chat_preset_profiles WHERE chat_id = ?1",
+            [id],
+            map_chat_preset_profile_row,
+        )?;
+        transaction.commit()?;
+        Ok(record)
     }
 
     pub fn upsert_chat_preset_profile(
@@ -379,7 +436,7 @@ impl Database {
         )?;
 
         let record = transaction.query_row(
-            "SELECT chat_id, generation_preset_id, updated_at FROM chat_preset_profiles WHERE chat_id = ?1",
+            "SELECT chat_id, generation_preset_id, updated_at, persona_preset_id FROM chat_preset_profiles WHERE chat_id = ?1",
             [id],
             map_chat_preset_profile_row,
         )?;
@@ -416,9 +473,11 @@ fn map_generation_preset_row(row: &Row<'_>) -> rusqlite::Result<GenerationPreset
 
 fn map_chat_preset_profile_row(row: &Row<'_>) -> rusqlite::Result<ChatPresetProfileRecord> {
     let generation_preset_id: Option<String> = row.get(1)?;
+    let persona_preset_id: Option<String> = row.get(3)?;
     Ok(ChatPresetProfileRecord {
         chat_id: row.get(0)?,
         generation_preset_id: generation_preset_id.unwrap_or_default(),
+        persona_preset_id: persona_preset_id.unwrap_or_default(),
         updated_at: row.get(2)?,
     })
 }

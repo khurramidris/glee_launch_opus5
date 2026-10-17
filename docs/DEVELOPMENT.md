@@ -40,6 +40,7 @@ development only (CPU).
 | --- | --- |
 | `GLEE_RESOURCE_MANIFEST` | Use a different resource manifest (for example one that points at a local test server) |
 | `GLEE_RESOURCES_DIR` | Store AI files somewhere other than the app data folder |
+| `GLEE_MODEL_EVAL_MIN_PASS_RATE` | Share of live-model eval cases that must pass for `pnpm eval:model` to succeed (default `0.8`) |
 
 App data lives in the platform's standard folder for the identifier
 `com.glee.desktop` (for example `~/.local/share/com.glee.desktop` on Linux).

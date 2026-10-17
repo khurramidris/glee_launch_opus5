@@ -217,9 +217,66 @@ function containsThirdPersonSelfNarration(
   );
 }
 
+// Short but natural answers that read fine on their own.
+const ALLOWED_SHORT_REPLY_TOKENS = new Set([
+  "yes",
+  "yeah",
+  "yep",
+  "no",
+  "nope",
+  "fine",
+  "okay",
+  "ok",
+  "alright",
+  "sorry",
+  "wait",
+  "hello",
+  "hi",
+  "hey",
+  "thanks",
+  "thank",
+  "you",
+  "hmm",
+  "hm",
+  "sure",
+  "maybe",
+  "perhaps",
+  "right",
+  "indeed",
+  "please",
+  "welcome",
+  "bye",
+  "goodbye",
+  "cheers",
+  "huh",
+  "oh",
+  "ah",
+  "well",
+  "really",
+  "true",
+  "exactly",
+  "absolutely",
+  "certainly",
+  "gladly",
+  "never",
+  "always",
+  "now",
+  "later",
+  "tonight",
+  "morning",
+]);
+
+function isShortUserTurn(latestUserMessage?: string): boolean {
+  const userTokens = normalizeText(latestUserMessage ?? "")
+    .split(" ")
+    .filter(Boolean);
+  return userTokens.length > 0 && userTokens.length <= 3;
+}
+
 function containsInsufficientSubstance(
   reply: string,
   prepared?: PreparedResponseRequest,
+  latestUserMessage?: string,
 ): boolean {
   const normalized = normalizeText(reply);
   if (!normalized) {
@@ -231,25 +288,19 @@ function containsInsufficientSubstance(
     return true;
   }
 
-  const allowedSingleTokenReplies = new Set([
-    "yes",
-    "no",
-    "fine",
-    "okay",
-    "ok",
-    "sorry",
-    "wait",
-    "hello",
-    "hi",
-    "hey",
-    "thanks",
-  ]);
+  // A terse reply is natural when the user's own turn was terse or a greeting.
+  const shortUserTurn =
+    isShortUserTurn(latestUserMessage ?? prepared?.context.latestUserMessage) ||
+    isShortDirectGreeting(latestUserMessage ?? prepared?.context.latestUserMessage);
+  const recognisedShortAnswer = tokens.every((token) =>
+    ALLOWED_SHORT_REPLY_TOKENS.has(token),
+  );
 
   if (tokens.length === 1) {
-    return !allowedSingleTokenReplies.has(tokens[0] ?? "");
+    return !recognisedShortAnswer && !shortUserTurn;
   }
 
-  if (prepared?.context.mode === "group") {
+  if (prepared?.context.mode === "group" && !recognisedShortAnswer && !shortUserTurn) {
     if (tokens.length <= 2 && reply.trim().length < 18) {
       return true;
     }
@@ -267,22 +318,19 @@ function containsInsufficientSubstance(
   return false;
 }
 
-function containsIncompleteSentence(reply: string): boolean {
+// A stray quote or asterisk is repaired by the sanitizer and is not evidence of
+// a cut-off reply, so only the wording of the tail is judged here. A reply the
+// runtime stopped at its token limit is trimmed to a clean boundary instead.
+function containsIncompleteSentence(reply: string, truncated = false): boolean {
+  if (truncated) {
+    return false;
+  }
   const trimmed = reply.trim();
   const withoutTrailingControls = trimmed
     .replace(/\s*(?:regenerate|branch|export)\s*$/i, "")
     .trim();
   if (!withoutTrailingControls) {
     return false;
-  }
-
-  const unclosedQuote =
-    (withoutTrailingControls.match(/"/g) ?? []).length % 2 === 1 ||
-    ((withoutTrailingControls.match(/“/g) ?? []).length >
-      (withoutTrailingControls.match(/”/g) ?? []).length);
-  const unclosedAsterisk = (withoutTrailingControls.match(/\*/g) ?? []).length % 2 === 1;
-  if (unclosedQuote || unclosedAsterisk) {
-    return true;
   }
 
   const tokens = normalizeText(withoutTrailingControls).split(" ").filter(Boolean);
@@ -794,7 +842,17 @@ function containsUserEcho(reply: string, latestUserMessage?: string): boolean {
   if (normalizedUser.length < 4) {
     return false;
   }
-  return normalizedReply.includes(normalizedUser);
+  if (!normalizedReply.includes(normalizedUser)) {
+    return false;
+  }
+  // A short message such as "hello" is routinely repeated inside a normal
+  // reply ("Hello there!"); it only counts as an echo when it is long enough to
+  // be a deliberate copy or when a few words make up most of the reply.
+  const userWordCount = normalizedUser.split(" ").filter(Boolean).length;
+  const longEnough = normalizedUser.length >= 20 || userWordCount >= 4;
+  const mostOfReply =
+    userWordCount >= 3 && normalizedUser.length / normalizedReply.length >= 0.8;
+  return longEnough || mostOfReply;
 }
 
 function containsUserTranscriptLeakage(
@@ -1397,16 +1455,26 @@ function missesImmediateReaction(
   return !reactionSignalPatterns.some((pattern) => pattern.test(normalized));
 }
 
+const ASSISTANT_SPEAK_PATTERNS = [
+  // "Of course! I'd be happy to help", "Certainly! Here is ..."
+  /^(?:of course|certainly|sure|absolutely)[!,.]?\s+(?:i(?:'d| would| will)?\s+(?:be\s+)?(?:happy|glad|delighted)\s+to\s+(?:help|assist)|i can (?:help|assist)|here(?:'s| is| are)\b|let me (?:help|assist|provide|explain))/,
+  /^i can (?:help|assist) you\b/,
+  /^i(?:'d| would) be (?:happy|glad|delighted) to (?:help|assist)/,
+  /^i(?:'m| am) here to (?:help|assist)/,
+  /^i understand (?:your (?:request|concern|question|frustration)|that you (?:want|would like|need))/,
+  /(?:^|[.!?]\s+)how can i (?:help|assist)\b/,
+];
+
+// A bare "Of course," or "I understand." is an ordinary in-character opener;
+// only service-desk phrasing counts as assistant drift.
 function containsGenericAssistantDrift(reply: string): boolean {
-  const normalized = reply.trim().toLowerCase();
+  const normalized = reply
+    .trim()
+    .toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/^[\s"“”*_]+/, "");
   return (
-    normalized.startsWith("i understand") ||
-    normalized.startsWith("i can help") ||
-    normalized.startsWith("i'd be happy to help") ||
-    normalized.startsWith("how can i help") ||
-    normalized.startsWith("certainly") ||
-    normalized.startsWith("of course") ||
-    normalized.startsWith("i'm here to help") ||
+    ASSISTANT_SPEAK_PATTERNS.some((pattern) => pattern.test(normalized)) ||
     /\b(allow me to assist|i can assist you|let me assist you|let me show you|would you care if we|present (?:you|some)|perfect pair|suit your taste|available here today|what might suit your taste)\b/i.test(
       normalized,
     )
@@ -1468,8 +1536,24 @@ export interface ReplyAssessment {
   retryRequested: boolean;
   suppressPreview: boolean;
   qualityScore: number;
+  // True only for output that must never be shown, even as a last resort.
   fatal: boolean;
 }
+
+// Output that is genuinely broken rather than merely imperfect: leaked
+// scaffolding, reasoning, another speaker's voice, or a stub with no content.
+// Everything else can be shown as the best available attempt when a repair
+// does not improve it.
+export const UNSHOWABLE_REASONS: ReadonlySet<ResponseEvaluationReason> = new Set([
+  "empty_after_sanitize",
+  "insufficient_substance",
+  "transcript_leakage",
+  "placeholder_leak",
+  "role_inversion",
+  "other_participant_impersonation",
+  "meta_reasoning",
+  "scene_replacement_drift",
+]);
 
 export function evaluateCharacterReply(input: {
   reply: string;
@@ -1477,6 +1561,9 @@ export function evaluateCharacterReply(input: {
   userName?: string;
   latestUserMessage?: string;
   prepared?: PreparedResponseRequest;
+  // The runtime stopped at its token limit; the reply was already trimmed to a
+  // clean boundary, so its ending is not evidence of a broken sentence.
+  truncated?: boolean;
 }): ReplyAssessment {
   const reasons: ResponseEvaluationReason[] = [];
   const trimmed = input.reply.trim();
@@ -1492,24 +1579,28 @@ export function evaluateCharacterReply(input: {
   ) {
     reasons.push("meta_reasoning");
   }
-  if (
-    trimmed &&
+  // A bare "Name replies:" label is a stub, not a reply that merely ends early.
+  const hasDanglingSpeakerLabel =
+    Boolean(trimmed) &&
     containsDanglingSpeakerAttribution(
       trimmed,
       input.speakerName,
       input.userName,
       input.prepared,
-    )
-  ) {
+    );
+  if (hasDanglingSpeakerLabel) {
     reasons.push("incomplete_sentence");
   }
   if (trimmed && containsThirdPersonSelfNarration(trimmed, input.speakerName)) {
     reasons.push("third_person_self_narration");
   }
-  if (trimmed && containsInsufficientSubstance(trimmed, input.prepared)) {
+  if (
+    trimmed &&
+    containsInsufficientSubstance(trimmed, input.prepared, input.latestUserMessage)
+  ) {
     reasons.push("insufficient_substance");
   }
-  if (trimmed && containsIncompleteSentence(trimmed)) {
+  if (trimmed && containsIncompleteSentence(trimmed, input.truncated)) {
     reasons.push("incomplete_sentence");
   }
   if (trimmed && containsRepeatedRecentOpening(trimmed, input.prepared)) {
@@ -1626,20 +1717,8 @@ export function evaluateCharacterReply(input: {
     reason === "user_agency_violation",
   );
 
-  const fatalReasons = reasons.filter((reason) =>
-    reason === "transcript_leakage" ||
-    reason === "role_inversion" ||
-    reason === "user_choice_overwrite" ||
-    reason === "scene_replacement_drift" ||
-    reason === "other_participant_impersonation" ||
-    reason === "placeholder_leak" ||
-    reason === "insufficient_substance" ||
-    reason === "incomplete_sentence" ||
-    reason === "repeated_opening" ||
-    reason === "observer_role_violation" ||
-    reason === "same_round_copying" ||
-    reason === "same_round_non_engagement",
-  );
+  const fatal =
+    hasDanglingSpeakerLabel || reasons.some((reason) => UNSHOWABLE_REASONS.has(reason));
 
   const qualityPenalty =
     reasons.reduce((score, reason) => {
@@ -1677,7 +1756,7 @@ export function evaluateCharacterReply(input: {
         case "role_inversion":
           return score + 0.5;
         case "generic_assistant_drift":
-          return score + 0.15;
+          return score + 0.3;
         case "scene_role_drift":
           return score + 0.25;
         case "generic_user_reference":
@@ -1700,6 +1779,6 @@ export function evaluateCharacterReply(input: {
     retryRequested: retryReasons.length > 0,
     suppressPreview: suppressPreviewReasons.length > 0 || !trimmed,
     qualityScore: Math.max(0, 1 - qualityPenalty),
-    fatal: fatalReasons.length > 0,
+    fatal,
   };
 }

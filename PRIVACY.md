@@ -21,6 +21,18 @@ and the file being requested. Nothing about you or your chats is sent.
 Every file is checked against a fingerprint (SHA-256) built into the app before
 it is used.
 
+## Update checks
+
+Glee checks for new versions by fetching one small public file (`latest.json`)
+from the project's GitHub releases about 20 seconds after it starts and then
+after that no more than once every few hours. The request carries no account, device identifier, or
+information about your chats; like any web request, GitHub sees your IP address
+and that Glee (with its version number) asked for the file. When you choose to
+download an update, the installer comes from GitHub and is checked against a
+SHA-256 fingerprint before it is opened. This and the one-time AI download are
+the only network traffic Glee creates. Turn automatic checks off under
+**Settings → Updates**; you can still check by hand.
+
 ## Local network safety
 
 The AI engine listens only on your own computer (`127.0.0.1`), requires a

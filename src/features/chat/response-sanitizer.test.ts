@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  balanceDanglingMarkup,
   buildLlamaStopSequences,
   LLAMA_STOP_SEQUENCES,
   sanitizeAssistantHistoryContent,
   sanitizeAssistantReply,
   sanitizeStreamingAssistantPreview,
+  trimTruncatedReply,
 } from "./response-sanitizer";
 
 describe("response sanitizer", () => {
@@ -377,5 +379,130 @@ describe("response sanitizer", () => {
       "\nMe:",
       "\nRiley:",
     ]);
+  });
+
+  it("adds the other participants as stop sequences in group chats", () => {
+    expect(
+      buildLlamaStopSequences({
+        userName: "Riley",
+        speakerName: "Lara Lightland",
+        participantNames: ["Lara Lightland", "Yulian Petrov", "Zoë"],
+      }),
+    ).toEqual([
+      "\nUser:",
+      "\nHuman:",
+      "\nYou:",
+      "\nMe:",
+      "\nRiley:",
+      "\nYulian Petrov:",
+      "\nYulian:",
+      "\nZoë:",
+    ]);
+  });
+
+  it("does not stop on an ambiguous first name or the speaker's own name", () => {
+    const stops = buildLlamaStopSequences({
+      speakerName: "Sam Rivers",
+      participantNames: ["Sam Rivers", "Sam Hale", "Ivy"],
+    });
+
+    expect(stops).toContain("\nSam Hale:");
+    expect(stops).toContain("\nIvy:");
+    expect(stops).not.toContain("\nSam:");
+    expect(stops).not.toContain("\nSam Rivers:");
+  });
+
+  describe("balanceDanglingMarkup", () => {
+    it("closes a dangling quote", () => {
+      expect(balanceDanglingMarkup('She nods. "We should go back now.')).toBe(
+        'She nods. "We should go back now."',
+      );
+    });
+
+    it("closes a dangling asterisk action", () => {
+      expect(balanceDanglingMarkup("*She leans on the doorway and waits")).toBe(
+        "*She leans on the doorway and waits*",
+      );
+    });
+
+    it("closes a dangling curly quote", () => {
+      expect(balanceDanglingMarkup("She says, “Stay close")).toBe("She says, “Stay close”");
+    });
+
+    it("drops an opener with nothing after it", () => {
+      expect(balanceDanglingMarkup('Fine, let us go. "')).toBe("Fine, let us go.");
+      expect(balanceDanglingMarkup("Fine, let us go. *")).toBe("Fine, let us go.");
+    });
+
+    it("closes the most recently opened mark first", () => {
+      expect(balanceDanglingMarkup('*She whispers "stay quiet')).toBe(
+        '*She whispers "stay quiet"*',
+      );
+    });
+
+    it("leaves balanced and mark-free text alone", () => {
+      expect(balanceDanglingMarkup('*Smiles.* "Hello there."')).toBe('*Smiles.* "Hello there."');
+      expect(balanceDanglingMarkup("Plain text.")).toBe("Plain text.");
+    });
+
+    it("is applied by the reply sanitizer", () => {
+      expect(sanitizeAssistantReply('She smiles. "Come in out of the cold.')).toBe(
+        'She smiles. "Come in out of the cold."',
+      );
+    });
+  });
+
+  describe("trimTruncatedReply", () => {
+    it("cuts back to the last complete sentence", () => {
+      expect(
+        trimTruncatedReply("We leave at dawn. Bring water. And if the road is flooded then we"),
+      ).toBe("We leave at dawn. Bring water.");
+    });
+
+    it("keeps a reply that already ends on a sentence boundary", () => {
+      expect(trimTruncatedReply("We leave at dawn. Bring water.")).toBe(
+        "We leave at dawn. Bring water.",
+      );
+    });
+
+    it("keeps the closing quote of the last complete sentence", () => {
+      expect(trimTruncatedReply('"We leave at dawn." She turns toward the')).toBe(
+        '"We leave at dawn."',
+      );
+    });
+
+    it("balances a quote opened before the cut", () => {
+      expect(
+        trimTruncatedReply('"We leave at dawn. Bring water, and tell no one about the'),
+      ).toBe('"We leave at dawn."');
+    });
+
+    it("balances an action opened before the cut", () => {
+      expect(trimTruncatedReply("*She lifts the lantern. The light catches the")).toBe(
+        "*She lifts the lantern.*",
+      );
+    });
+
+    it("falls back to the last paragraph when there is no sentence boundary", () => {
+      expect(trimTruncatedReply("Come in out of the rain\n\nThe fire is nearly out and the")).toBe(
+        "Come in out of the rain",
+      );
+    });
+
+    it("keeps a reply with no boundary at all instead of emptying it", () => {
+      expect(trimTruncatedReply("well I think we should probably head over to the")).toBe(
+        "well I think we should probably head over to the",
+      );
+    });
+
+    it("does not cut at an abbreviation", () => {
+      expect(trimTruncatedReply("We meet Dr. Hale at noon and then walk to the")).toBe(
+        "We meet Dr. Hale at noon and then walk to the",
+      );
+    });
+
+    it("handles empty input", () => {
+      expect(trimTruncatedReply("  \n")).toBe("");
+    });
   });
 });

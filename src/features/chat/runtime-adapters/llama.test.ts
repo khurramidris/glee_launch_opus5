@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { toLlamaChatMessages, toLlamaChatRequest } from "./llama";
+import {
+  TURN_NOTES_CLOSE,
+  TURN_NOTES_OPEN,
+  toLlamaChatMessages,
+  toLlamaChatRequest,
+} from "./llama";
 import type { CompiledCharacterPrompt } from "../response-system/types";
 
 describe("llama runtime adapter", () => {
@@ -168,11 +173,39 @@ describe("llama runtime adapter", () => {
     const second = toLlamaChatMessages(turn("The user makes a threat.", "Aria fears storms."));
 
     expect(first[0]).toEqual(second[0]);
-    expect(first[0]?.content).not.toContain("Latest user move");
+    expect(first[0]?.content).not.toContain("The user asks a question.");
     const latest = second[second.length - 1]?.content ?? "";
-    expect(latest.startsWith("<reply notes>\n")).toBe(true);
-    expect(latest).toContain("Latest user move:\nThe user makes a threat.");
-    expect(latest).toContain("Relevant memories:\nAria fears storms.");
-    expect(latest.endsWith("</reply notes>\n\nTell me the truth.")).toBe(true);
+    expect(latest).toBe(
+      "<reply notes>\nThe user makes a threat.\nAria fears storms.\n</reply notes>\n\nTell me the truth.",
+    );
+  });
+
+  it("caps turn notes and drops whole lines instead of cutting them", () => {
+    const longMemory = Array.from(
+      { length: 20 },
+      (_, index) => `Remembered detail number ${index} about the user.`,
+    ).join("\n");
+    const messages = toLlamaChatMessages({
+      systemSections: [
+        { key: "system_contract", priority: 0, content: "Stay in character." },
+        { key: "memory_snippets", priority: 5, content: longMemory },
+      ],
+      exampleMessages: [],
+      historyMessages: [{ role: "user", content: "Tell me the truth." }],
+    });
+    const latest = messages[messages.length - 1]?.content ?? "";
+    const notes = latest.slice(TURN_NOTES_OPEN.length, latest.indexOf(TURN_NOTES_CLOSE)).trim();
+
+    expect(notes.length).toBeLessThanOrEqual(700);
+    expect(notes.split("\n").length).toBeGreaterThan(5);
+    for (const line of notes.split("\n")) {
+      expect(line).toMatch(/^Remembered detail number \d+ about the user\.$/);
+    }
+  });
+
+  it("omits the notes block when no turn section has content", () => {
+    const messages = toLlamaChatMessages(groupCompiledPrompt);
+
+    expect(JSON.stringify(messages)).not.toContain(TURN_NOTES_OPEN);
   });
 });

@@ -1,13 +1,17 @@
 import {
   sanitizeAssistantReply,
   sanitizeStreamingAssistantPreview,
+  trimTruncatedReply,
 } from "../response-sanitizer";
 import { buildCharacterReplyRepairInstruction } from "../response-validator";
 import {
   formatResponseDiagnosticError,
   type ResponseDiagnosticsRecorder,
 } from "./diagnostics";
-import { evaluateCharacterReply } from "./evaluation/evaluate-reply";
+import {
+  evaluateCharacterReply,
+  type ReplyAssessment,
+} from "./evaluation/evaluate-reply";
 import { isNarrativeHeavyRuntimeText } from "./runtime-field-gating";
 import { buildUserReferenceInstruction } from "./user-reference";
 import type {
@@ -51,42 +55,50 @@ function dedupeReasons(
   return [...new Set(reasons)];
 }
 
-function canAcceptOriginalReplyAfterRepairFailure(
+// A rescue rewrite targets scene, role and tone failures; it is skipped when
+// the repaired draft only fails on shape or wording, which another prompt
+// would not fix.
+const RESCUE_SKIP_REASONS = new Set<ResponseEvaluationReason>([
+  "insufficient_substance",
+  "incomplete_sentence",
+  "repeated_opening",
+  "user_choice_overwrite",
+  "observer_role_violation",
+  "same_round_copying",
+  "same_round_non_engagement",
+]);
+
+function canAttemptRescueRepair(
   prepared: PreparedResponseRequest,
-  reasons: ResponseEvaluationReason[],
+  assessment: ReplyAssessment,
 ): boolean {
-  if (prepared.context.mode === "group") {
-    return false;
+  return (
+    prepared.context.mode === "group" &&
+    assessment.retryRequested &&
+    !assessment.fatal &&
+    !assessment.reasons.some((reason) => RESCUE_SKIP_REASONS.has(reason))
+  );
+}
+
+type ReplyCandidate = {
+  reply: string;
+  assessment: ReplyAssessment;
+  repaired: boolean;
+};
+
+// When no attempt passes validation, show the best one that is not genuinely
+// broken instead of discarding the turn. Ties go to the earlier attempt.
+function pickBestAvailableReply(candidates: ReplyCandidate[]): ReplyCandidate | null {
+  let best: ReplyCandidate | null = null;
+  for (const candidate of candidates) {
+    if (!candidate.reply.trim() || candidate.assessment.fatal) {
+      continue;
+    }
+    if (!best || candidate.assessment.qualityScore > best.assessment.qualityScore) {
+      best = candidate;
+    }
   }
-
-  const severeReasons = new Set<ResponseEvaluationReason>([
-    "meta_reasoning",
-    "third_person_self_narration",
-    "insufficient_substance",
-    "incomplete_sentence",
-    "user_choice_overwrite",
-    "scene_replacement_drift",
-    "observer_role_violation",
-    "same_round_copying",
-    "same_round_non_engagement",
-    "static_lore_echo",
-    "other_participant_impersonation",
-    "user_echo",
-    "placeholder_leak",
-    "transcript_leakage",
-    "role_inversion",
-    "scene_role_drift",
-    "generic_assistant_drift",
-    "user_agency_violation",
-    "relationship_tone_violation",
-    "missed_immediate_reaction",
-  ]);
-
-  if (reasons.some((reason) => severeReasons.has(reason))) {
-    return false;
-  }
-
-  return true;
+  return best;
 }
 
 function canAcceptDegradedSingleReply(
@@ -177,6 +189,7 @@ function maybePreferDialogueOnlyReply(input: {
   speakerName?: string;
   userName?: string;
   latestUserMessage?: string;
+  truncated?: boolean;
   prepared: PreparedResponseRequest;
 }): { reply: string; assessment: ReturnType<typeof evaluateCharacterReply> } | null {
   const dialogueOnly = normalizeSalvagedDialogue(input.reply);
@@ -190,6 +203,7 @@ function maybePreferDialogueOnlyReply(input: {
     userName: input.userName,
     latestUserMessage: input.latestUserMessage,
     prepared: input.prepared,
+    truncated: input.truncated,
   });
 
   return { reply: dialogueOnly, assessment };
@@ -277,20 +291,45 @@ export function buildStreamingPreview(
   return preview;
 }
 
+type RepairOutput = string | { content: string; truncated?: boolean };
+
+function normalizeRepairOutput(output: RepairOutput): {
+  content: string;
+  truncated: boolean;
+} {
+  if (typeof output === "string") {
+    return { content: output, truncated: false };
+  }
+  return { content: output.content, truncated: output.truncated === true };
+}
+
 export async function finalizeResponseOutput(input: {
   rawOutput: string;
+  // The runtime stopped at its token limit rather than finishing the reply.
+  truncated?: boolean;
   prepared: PreparedResponseRequest;
-  repair?: (instruction: string) => Promise<string>;
+  repair?: (instruction: string) => Promise<RepairOutput>;
   fallbackReply?: string;
   diagnostics?: ResponseDiagnosticsRecorder;
 }): Promise<ResponseEvaluation> {
   const speakerName = input.prepared.context.speaker?.name;
   const userName = input.prepared.context.userProfile?.name;
   const latestUserMessage = input.prepared.context.latestUserMessage;
-  const sanitized = sanitizeAssistantReply(input.rawOutput, {
-    speakerName,
-    userName,
-  });
+  const initialTruncated = input.truncated === true;
+  const sanitizeAttempt = (raw: string, truncated: boolean): string => {
+    const cleaned = sanitizeAssistantReply(raw, { speakerName, userName });
+    return truncated ? trimTruncatedReply(cleaned) : cleaned;
+  };
+  const assessAttempt = (reply: string, truncated: boolean) =>
+    evaluateCharacterReply({
+      reply,
+      speakerName,
+      userName,
+      latestUserMessage,
+      prepared: input.prepared,
+      truncated,
+    });
+  const sanitized = sanitizeAttempt(input.rawOutput, initialTruncated);
   input.diagnostics?.recordRawOutput(input.rawOutput);
   input.diagnostics?.recordSanitizedOutput(sanitized);
   const finish = (evaluation: ResponseEvaluation): ResponseEvaluation => {
@@ -299,18 +338,13 @@ export async function finalizeResponseOutput(input: {
   };
   const fallbackReply = input.fallbackReply ?? `${speakerName ?? "Assistant"} has no response yet.`;
   let initialReply = sanitized;
-  let initialAssessment = evaluateCharacterReply({
-    reply: initialReply,
-    speakerName,
-    userName,
-    latestUserMessage,
-    prepared: input.prepared,
-  });
+  let initialAssessment = assessAttempt(initialReply, initialTruncated);
   const dialogueOnlyCandidate = maybePreferDialogueOnlyReply({
     reply: sanitized,
     speakerName,
     userName,
     latestUserMessage,
+    truncated: initialTruncated,
     prepared: input.prepared,
   });
   if (
@@ -361,84 +395,78 @@ export async function finalizeResponseOutput(input: {
       finalReply: reply,
     });
 
-  const resolveRepairFailure = (): ResponseEvaluation => {
-    reasons.push("repair_failed");
-    if (
-      initialReply.trim() &&
-      !initialAssessment.fatal &&
-      (
-        canAcceptOriginalReplyAfterRepairFailure(
-          input.prepared,
-          initialAssessment.reasons,
-        ) ||
-        canAcceptDegradedSingleReply(
-          input.prepared,
-          initialAssessment.reasons,
-        ) ||
-        canAcceptDegradedGroupReply(
-          input.prepared,
-          initialAssessment.reasons,
-        )
-      )
-    ) {
+  const candidates: ReplyCandidate[] = [
+    { reply: initialReply, assessment: initialAssessment, repaired: false },
+  ];
+
+  // Once validation and any repair are exhausted, show the best attempt that
+  // is not genuinely broken; only an unshowable result drops the turn.
+  const settleOnBestAvailable = (repairAttempted: boolean): ResponseEvaluation => {
+    const best = pickBestAvailableReply(candidates);
+    if (best?.repaired) {
+      reasons.push(...best.assessment.reasons, "repair_applied");
+      return finish({
+        accepted: true,
+        repaired: true,
+        retryRequested: true,
+        qualityScore: best.assessment.qualityScore,
+        reasons: dedupeReasons(reasons),
+        rawReply: input.rawOutput,
+        finalReply: best.reply.trim(),
+      });
+    }
+    if (repairAttempted) {
+      reasons.push("repair_failed");
+    }
+    if (best) {
       return finish(acceptOriginalReply({
         reasons,
         rawReply: input.rawOutput,
-        finalReply: initialReply.trim(),
-        qualityScore: initialAssessment.qualityScore,
+        finalReply: best.reply.trim(),
+        qualityScore: best.assessment.qualityScore,
       }));
     }
     if (!initialReply.trim()) {
       reasons.push("fallback_used");
       return reject(fallbackReply, 0);
     }
-    return reject("", initialAssessment.qualityScore);
+    const lastAssessment = candidates[candidates.length - 1]?.assessment;
+    return reject("", lastAssessment?.qualityScore ?? initialAssessment.qualityScore);
   };
 
   if (retryRequested && input.repair) {
     reasons.push("policy_retry_requested");
-    let repairedRaw: string;
+    let repairedOutput: ReturnType<typeof normalizeRepairOutput>;
     const repairAttempt = input.diagnostics?.startRepairAttempt("policy");
     try {
-      repairedRaw = await input.repair(
-        buildCharacterReplyRepairInstruction({
-          speakerName,
-          userName,
-          userGender: input.prepared.context.userProfile?.gender,
-          latestUserMessage,
-          turnInterpretation: input.prepared.turnInterpretation,
-          reactionPlan: input.prepared.reactionPlan,
-        }),
+      repairedOutput = normalizeRepairOutput(
+        await input.repair(
+          buildCharacterReplyRepairInstruction({
+            speakerName,
+            userName,
+            userGender: input.prepared.context.userProfile?.gender,
+            latestUserMessage,
+            turnInterpretation: input.prepared.turnInterpretation,
+            reactionPlan: input.prepared.reactionPlan,
+          }),
+        ),
       );
     } catch (error) {
       repairAttempt?.finish({
         error: formatResponseDiagnosticError(error),
       });
-      return resolveRepairFailure();
+      return settleOnBestAvailable(true);
     }
-    const repaired = sanitizeAssistantReply(repairedRaw, {
-      speakerName,
-      userName,
-    });
-    const repairedAssessment = evaluateCharacterReply({
-      reply: repaired,
-      speakerName,
-      userName,
-      latestUserMessage,
-      prepared: input.prepared,
-    });
+    const repairedRaw = repairedOutput.content;
+    const repaired = sanitizeAttempt(repairedRaw, repairedOutput.truncated);
+    const repairedAssessment = assessAttempt(repaired, repairedOutput.truncated);
+    const repairedDegradedAcceptable =
+      !repairedAssessment.fatal &&
+      (canAcceptDegradedSingleReply(input.prepared, repairedAssessment.reasons) ||
+        canAcceptDegradedGroupReply(input.prepared, repairedAssessment.reasons));
     const repairedAccepted =
       Boolean(repaired.trim()) &&
-      (
-        !repairedAssessment.retryRequested ||
-        (
-          !repairedAssessment.fatal &&
-          (
-            canAcceptDegradedSingleReply(input.prepared, repairedAssessment.reasons) ||
-            canAcceptDegradedGroupReply(input.prepared, repairedAssessment.reasons)
-          )
-        )
-      );
+      (!repairedAssessment.retryRequested || repairedDegradedAcceptable);
     repairAttempt?.finish({
       rawOutput: repairedRaw,
       sanitizedOutput: repaired,
@@ -457,11 +485,7 @@ export async function finalizeResponseOutput(input: {
         finalReply: repaired.trim(),
       });
     }
-    if (
-      repaired.trim() &&
-      !repairedAssessment.fatal &&
-      canAcceptDegradedSingleReply(input.prepared, repairedAssessment.reasons)
-    ) {
+    if (repaired.trim() && repairedDegradedAcceptable) {
       reasons.push(...repairedAssessment.reasons);
       reasons.push("repair_applied");
       return finish({
@@ -474,76 +498,28 @@ export async function finalizeResponseOutput(input: {
         finalReply: repaired.trim(),
       });
     }
-    if (
-      repaired.trim() &&
-      !repairedAssessment.fatal &&
-      canAcceptDegradedGroupReply(input.prepared, repairedAssessment.reasons)
-    ) {
-      reasons.push(...repairedAssessment.reasons);
-      reasons.push("repair_applied");
-      return finish({
-        accepted: true,
-        repaired: true,
-        retryRequested: true,
-        qualityScore: repairedAssessment.qualityScore,
-        reasons: dedupeReasons(reasons),
-        rawReply: input.rawOutput,
-        finalReply: repaired.trim(),
-      });
-    }
-    if (
-      initialReply.trim() &&
-      !initialAssessment.fatal &&
-      (
-        canAcceptOriginalReplyAfterRepairFailure(
-          input.prepared,
-          initialAssessment.reasons,
-        ) ||
-        canAcceptDegradedSingleReply(
-          input.prepared,
-          initialAssessment.reasons,
-        ) ||
-        canAcceptDegradedGroupReply(
-          input.prepared,
-          initialAssessment.reasons,
-        )
-      )
-    ) {
-      reasons.push("repair_failed");
-      return finish(acceptOriginalReply({
-        reasons,
-        rawReply: input.rawOutput,
-        finalReply: initialReply.trim(),
-        qualityScore: initialAssessment.qualityScore,
-      }));
-    }
-    if (
-      repairedAssessment.retryRequested &&
-      !repairedAssessment.fatal &&
-      input.prepared.context.mode === "group"
-    ) {
+    candidates.push({
+      reply: repaired,
+      assessment: repairedAssessment,
+      repaired: true,
+    });
+    if (repaired.trim() && canAttemptRescueRepair(input.prepared, repairedAssessment)) {
       const rescueAttempt = input.diagnostics?.startRepairAttempt("rescue");
+      let rescuedOutput: ReturnType<typeof normalizeRepairOutput>;
       try {
-        repairedRaw = await input.repair(buildRescueRepairInstruction(input.prepared));
+        rescuedOutput = normalizeRepairOutput(
+          await input.repair(buildRescueRepairInstruction(input.prepared)),
+        );
       } catch (error) {
         rescueAttempt?.finish({
           error: formatResponseDiagnosticError(error),
         });
-        return resolveRepairFailure();
+        return settleOnBestAvailable(true);
       }
-      const rescued = sanitizeAssistantReply(repairedRaw, {
-        speakerName,
-        userName,
-      });
-      const rescuedAssessment = evaluateCharacterReply({
-        reply: rescued,
-        speakerName,
-        userName,
-        latestUserMessage,
-        prepared: input.prepared,
-      });
+      const rescued = sanitizeAttempt(rescuedOutput.content, rescuedOutput.truncated);
+      const rescuedAssessment = assessAttempt(rescued, rescuedOutput.truncated);
       rescueAttempt?.finish({
-        rawOutput: repairedRaw,
+        rawOutput: rescuedOutput.content,
         sanitizedOutput: rescued,
         reasons: rescuedAssessment.reasons,
         accepted: Boolean(rescued.trim() && !rescuedAssessment.retryRequested),
@@ -560,8 +536,13 @@ export async function finalizeResponseOutput(input: {
           finalReply: rescued.trim(),
         });
       }
+      candidates.push({
+        reply: rescued,
+        assessment: rescuedAssessment,
+        repaired: true,
+      });
     }
-    if (!repaired.trim()) {
+    if (!repaired.trim() && !pickBestAvailableReply(candidates)) {
       const repairedRawAssessment = evaluateCharacterReply({
         reply: repairedRaw,
         speakerName,
@@ -580,8 +561,7 @@ export async function finalizeResponseOutput(input: {
       reasons.push("empty_after_sanitize");
       reasons.push("fallback_used");
     }
-    reasons.push("repair_failed");
-    return reject("", repairedAssessment.qualityScore);
+    return settleOnBestAvailable(true);
   }
 
   const finalReply = initialReply.trim() || fallbackReply;
@@ -607,7 +587,7 @@ export async function finalizeResponseOutput(input: {
   }
 
   if (retryRequested) {
-    return reject(finalReply, initialAssessment.qualityScore);
+    return settleOnBestAvailable(false);
   }
 
   return finish({

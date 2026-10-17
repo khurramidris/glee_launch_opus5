@@ -58,6 +58,11 @@ import {
   profileStore,
   presetStore,
 } from "../../stores";
+import { effectiveUserProfile } from "../personas/effective-profile";
+import { extensionRegistry } from "../../extensions-runtime";
+import { maybeUpdateAutoSummary } from "./auto-summary";
+import { buildTurnNoteLines } from "./runtime-adapters/llama";
+import { maybeExtractMemories } from "../memory/memory-extraction";
 import type {
   AppendMessagePayload,
   Character,
@@ -84,7 +89,7 @@ import type { ResponseDiagnosticsRecorder } from "./response-system/diagnostics"
 import {
   GENERATION_CANCELLED_MESSAGE,
   buildExportSlug,
-  downloadTextFile,
+  exportChatTranscript,
   emptyMemory,
   isGenerationCancelledError,
   normalizeError,
@@ -104,13 +109,21 @@ const STREAM_FIRST_TOKEN_TIMEOUT_MS = 45_000;
 const STREAM_INACTIVITY_TIMEOUT_MS = 30_000;
 const STREAM_TOTAL_TIMEOUT_MS = 240_000;
 const STREAM_PREVIEW_INTERVAL_MS = 50;
-const REPAIR_MAX_TOKENS = 256;
+const AI_NOT_RUNNING_MESSAGE =
+  "The AI is not running. Open Settings, then AI model, and choose Resume AI.";
 const REPLY_GENERATION_ATTEMPTS = 2;
 
 type ReplyTask = {
   chatId: string;
+  // Latest user message, used as the retrieval query for the round.
   text: string;
   historyEpoch: number;
+  // Explicit, ordered speakers that bypass automatic responder selection.
+  responderIds?: string[];
+};
+
+export type SendMessageOptions = {
+  responderIds?: string[];
 };
 
 type ReplyExecutionContext = {
@@ -409,17 +422,40 @@ function buildCanonicalRepairRequestBody(input: {
   return {
     ...baseRequest,
     stream: false,
-    max_tokens: Math.min(
-      Number(baseRequest.max_tokens ?? REPAIR_MAX_TOKENS),
-      REPAIR_MAX_TOKENS,
-    ),
+    // Same budget as the original request: a smaller cap would cut a rewrite
+    // short that the original reply had room to finish.
     messages: repairMessages,
   };
+}
+
+function lastAssistantSpeakerId(history: ChatMessage[]): string | undefined {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message?.role === "assistant" && message.speakerCharacterId) {
+      return message.speakerCharacterId;
+    }
+  }
+  return undefined;
+}
+
+// An explicit speaker list overrides selection but only for roster members;
+// it keeps the caller's order and drops duplicates.
+function resolveExplicitResponderIds(
+  requested: string[] | undefined,
+  roster: string[],
+): string[] | null {
+  if (!requested || requested.length === 0) {
+    return null;
+  }
+  const rosterSet = new Set(roster);
+  return [...new Set(requested)].filter((id) => rosterSet.has(id));
 }
 
 export const __test__ = {
   appendAssistantReplyWithFallback,
   buildCanonicalRepairRequestBody,
+  lastAssistantSpeakerId,
+  resolveExplicitResponderIds,
   prioritizeTurnOrderByAddress,
   selectGroupResponderIds,
   isHistoryEpochConflictError,
@@ -492,6 +528,13 @@ async function appendAssistantReplyWithFallback(input: {
       succeeded: true,
       messageId: appended.id,
       savedSpeakerCharacterId: appended.speakerCharacterId,
+    });
+    // Extensions may observe the finished reply; they never delay it.
+    void extensionRegistry.afterReply({
+      chatId: appended.chatId,
+      messageId: appended.id,
+      speakerCharacterId: appended.speakerCharacterId,
+      content: appended.content,
     });
     return appended;
   } catch (appendError) {
@@ -850,7 +893,25 @@ export function useChatOrchestration(
         }
         diagnostics.recordTiming("prepare", Date.now() - prepareStartedAt);
         diagnostics.recordLifecycle("prepared");
-        const requestBody = preparedResponse.runtimeRequest;
+        let requestBody = preparedResponse.runtimeRequest;
+        try {
+          const contributed = await extensionRegistry.transformPromptNotes(
+            buildTurnNoteLines(preparedResponse.compiledPrompt),
+            {
+              chatId,
+              characterId: speaker?.id,
+              participantIds: Object.keys(participantDirectory ?? {}),
+              isGroup: mode === "group",
+              isRegeneration: Boolean(isRegeneration),
+              userText: preparedResponse.context.latestUserMessage ?? "",
+            },
+          );
+          if (contributed.added.length > 0) {
+            requestBody = preparedResponse.buildRuntimeRequest(contributed.notes);
+          }
+        } catch (error) {
+          console.warn("Prompt extensions were skipped:", error);
+        }
         diagnostics.recordInspection(
           buildResponseDiagnosticsInspection(preparedResponse),
         );
@@ -1067,6 +1128,8 @@ export function useChatOrchestration(
         const finalizeStartedAt = Date.now();
         const evaluation = await finalizeResponseOutput({
           rawOutput: rawContent,
+          // Stopped at the token limit, not at a natural end of the reply.
+          truncated: finishReason === "length",
           prepared: preparedResponse,
           repair: async (instruction) =>
             fetchNonStreamingCompletion(
@@ -1075,7 +1138,10 @@ export function useChatOrchestration(
                 repairInstruction: instruction,
                 invalidDraft: compactInvalidDraft,
               }),
-            ).then((completion) => completion.content),
+            ).then((completion) => ({
+              content: completion.content,
+              truncated: completion.finishReason === "length",
+            })),
           fallbackReply: `${speaker?.name ?? "Assistant"} has no response yet.`,
           diagnostics,
         });
@@ -1191,7 +1257,7 @@ export function useChatOrchestration(
             // If persistence itself fails, the notice below is still the only safe fallback.
           }
           setReplyState(task.chatId, null);
-          setNotice({ kind: "error", message: "Runtime is not running." });
+          setNotice({ kind: "error", message: AI_NOT_RUNNING_MESSAGE });
           continue;
         }
 
@@ -1281,13 +1347,30 @@ export function useChatOrchestration(
             .map((id) => [id, queuedCharMap.get(id)?.name?.trim() ?? ""])
             .filter((entry): entry is [string, string] => Boolean(entry[1])),
         );
-        const turnOrder = isGroupChatMode(queuedChat, responders)
-          ? selectGroupResponderIds({
-              responderIds: responders,
-              participantDirectory,
-              latestUserMessage: task.text,
-            })
-          : responders.slice(0, 1);
+        let summaryDue = false;
+        const explicitTurnOrder = resolveExplicitResponderIds(
+          task.responderIds,
+          responders,
+        );
+        if (explicitTurnOrder?.length === 0) {
+          setReplyState(task.chatId, null);
+          setNotice({ kind: "error", message: "That character is not in this chat." });
+          continue;
+        }
+        const turnOrder =
+          explicitTurnOrder ??
+          (isGroupChatMode(queuedChat, responders)
+            ? selectGroupResponderIds({
+                responderIds: responders,
+                participantDirectory,
+                latestUserMessage: task.text,
+                lastSpeakerId: lastAssistantSpeakerId(
+                  filterGenerationFailureMessages(
+                    chatStore.getState().messagesByChat[task.chatId] ?? [],
+                  ),
+                ),
+              })
+            : responders.slice(0, 1));
         const memoryHitsBySpeaker = new Map<string, MemorySnippet[]>();
         try {
           const hitsBySpeaker = await resolveMemorySnippetsBatch(
@@ -1300,7 +1383,7 @@ export function useChatOrchestration(
                 speakerCharacterId: speaker?.id,
                 retrievalHints: buildResponseRetrievalHints({
                   speaker,
-                  userProfile: queuedUserProfile ?? undefined,
+                  userProfile: effectiveUserProfile(task.chatId) ?? queuedUserProfile ?? undefined,
                   relationshipState: queuedRelationshipState,
                 }),
               };
@@ -1352,7 +1435,7 @@ export function useChatOrchestration(
                 contextHits,
                 memoryHits,
                 relationshipState: queuedRelationshipState,
-                userProfile: queuedUserProfile ?? undefined,
+                userProfile: effectiveUserProfile(task.chatId) ?? queuedUserProfile ?? undefined,
                 runtimeEndpoint: queuedRuntime.endpoint,
                 activeModelName: queuedActiveModel?.name ?? "local-model",
                 samplingTemperature: queuedGenerationPreset?.temperature,
@@ -1391,6 +1474,7 @@ export function useChatOrchestration(
             task.historyEpoch,
           );
           await refreshChats();
+          summaryDue = true;
         } catch (error) {
           if (isGenerationCancelledError(error) || isHistoryEpochConflictError(error)) {
             setNotice({ kind: "info", message: "Generation stopped." });
@@ -1411,6 +1495,22 @@ export function useChatOrchestration(
         } finally {
           setStreaming(task.chatId, null);
           setReplyState(task.chatId, null);
+        }
+        if (summaryDue) {
+          // Keeps long chats' summaries current in the background; it skips itself
+          // when another reply is already waiting.
+          const backgroundOptions = {
+            chatId: task.chatId,
+            participantDirectory,
+            userName: effectiveUserProfile(task.chatId)?.name ?? queuedUserProfile?.name,
+            isBusy: () =>
+              replyQueueRef.current.length > 0 ||
+              Boolean(chatStore.getState().replyStateByChat?.[task.chatId]),
+          };
+          // Long-term memory runs after the summary so the two never compete for the model.
+          void Promise.resolve(maybeUpdateAutoSummary(backgroundOptions)).then(() =>
+            maybeExtractMemories(backgroundOptions),
+          );
         }
       }
     } finally {
@@ -1597,27 +1697,56 @@ export function useChatOrchestration(
     [refreshChats, setActiveCharacterId, setChats, setNotice, setParticipantsByChat],
   );
 
+  // Accepts either a form submit (text comes from the composer) or the text to
+  // send. `options.responderIds` names the characters that answer, in order,
+  // instead of automatic selection.
   const sendMessage = useCallback(
-    async (event?: FormEvent<HTMLFormElement>) => {
-      event?.preventDefault();
+    async (
+      textOrEvent?: FormEvent<HTMLFormElement> | string,
+      options?: SendMessageOptions,
+    ) => {
+      if (typeof textOrEvent !== "string") {
+        textOrEvent?.preventDefault();
+      }
       if (!activeChat) {
         return;
       }
-      const text = composerInput.trim();
-      if (!text) {
+      const draftText = (
+        typeof textOrEvent === "string" ? textOrEvent : composerInput
+      ).trim();
+      if (!draftText) {
         return;
       }
+      const responderIds = options?.responderIds?.length
+        ? dedupeIds(options.responderIds)
+        : undefined;
       if (runtime.status !== "running") {
-        setNotice({ kind: "error", message: "Runtime is not running." });
+        setNotice({ kind: "error", message: AI_NOT_RUNNING_MESSAGE });
         return;
       }
       if (replyStateByChat[activeChat.id]) {
         return;
       }
 
-      setComposerInput("");
-      if (composerRef.current) {
-        composerRef.current.style.height = "42px";
+      // Extensions may rewrite the message or stop it from being sent.
+      const outcome = await extensionRegistry.beforeSend({
+        chatId: activeChat.id,
+        text: draftText,
+      });
+      if (outcome.cancelled) {
+        setNotice({
+          kind: "info",
+          message: outcome.cancelled.reason ?? "The message was not sent.",
+        });
+        return;
+      }
+      const text = outcome.draft.text.trim() || draftText;
+
+      if (typeof textOrEvent !== "string" || draftText === composerInput.trim()) {
+        setComposerInput("");
+        if (composerRef.current) {
+          composerRef.current.style.height = "42px";
+        }
       }
 
       const chatId = activeChat.id;
@@ -1634,7 +1763,12 @@ export function useChatOrchestration(
         setReplyState(chatId, "queued");
         replyQueueRef.current = [
           ...replyQueueRef.current,
-          { chatId, text, historyEpoch: activeChat.historyEpoch },
+          {
+            chatId,
+            text,
+            historyEpoch: activeChat.historyEpoch,
+            ...(responderIds ? { responderIds } : {}),
+          },
         ];
         void processReplyQueue();
         try {
@@ -1672,9 +1806,55 @@ export function useChatOrchestration(
     ],
   );
 
+  // Asks one specific character for an extra reply to the latest user message
+  // without adding a new user message ("let X answer" / "continue").
+  const requestCharacterReply = useCallback(
+    async (characterId: string) => {
+      if (!activeChat) {
+        return;
+      }
+      if (runtime.status !== "running") {
+        setNotice({ kind: "error", message: AI_NOT_RUNNING_MESSAGE });
+        return;
+      }
+      if (replyStateByChat[activeChat.id]) {
+        return;
+      }
+      const chatId = activeChat.id;
+      const latestUserText = [...(messagesByChat[chatId] ?? [])]
+        .reverse()
+        .find((message) => message.role === "user")
+        ?.content.trim();
+      if (!latestUserText) {
+        setNotice({ kind: "info", message: "Send a message first." });
+        return;
+      }
+      setReplyState(chatId, "queued");
+      replyQueueRef.current = [
+        ...replyQueueRef.current,
+        {
+          chatId,
+          text: latestUserText,
+          historyEpoch: activeChat.historyEpoch,
+          responderIds: [characterId],
+        },
+      ];
+      void processReplyQueue();
+    },
+    [
+      activeChat,
+      messagesByChat,
+      processReplyQueue,
+      replyStateByChat,
+      runtime.status,
+      setNotice,
+      setReplyState,
+    ],
+  );
+
   const startEditUserMessage = useCallback(
     (message: ChatMessage) => {
-      if (message.role !== "user") {
+      if (message.role !== "user" && message.role !== "assistant") {
         return;
       }
       startEditMessage(message.id, message.content);
@@ -1699,7 +1879,9 @@ export function useChatOrchestration(
         if (targetIndex < 0) {
           throw new Error("Message not found in active chat.");
         }
-        const hasDependentTurns = targetIndex < history.length - 1;
+        // Rewriting what the user said invalidates the replies after it; touching
+        // up a character's reply leaves the rest of the conversation alone.
+        const hasDependentTurns = message.role === "user" && targetIndex < history.length - 1;
         let nextHistory: ChatMessage[];
         let nextEpoch = activeChat.historyEpoch;
         if (hasDependentTurns) {
@@ -1784,7 +1966,7 @@ export function useChatOrchestration(
         return;
       }
       if (runtime.status !== "running") {
-        setNotice({ kind: "error", message: "Runtime is not running." });
+        setNotice({ kind: "error", message: AI_NOT_RUNNING_MESSAGE });
         return;
       }
       const history = messagesByChat[activeChatId] ?? [];
@@ -1854,7 +2036,7 @@ export function useChatOrchestration(
               speakerCharacterId: speaker?.id,
               retrievalHints: buildResponseRetrievalHints({
                 speaker,
-                userProfile: userProfile ?? undefined,
+                userProfile: effectiveUserProfile(activeChatId) ?? userProfile ?? undefined,
                 relationshipState: activeRelationshipState,
               }),
             });
@@ -1889,7 +2071,7 @@ export function useChatOrchestration(
             contextHits,
             memoryHits,
             relationshipState: activeRelationshipState,
-            userProfile: userProfile ?? undefined,
+            userProfile: effectiveUserProfile(activeChatId) ?? userProfile ?? undefined,
             runtimeEndpoint: runtime.endpoint,
             activeModelName: activeModel?.name ?? "local-model",
             samplingTemperature,
@@ -2102,17 +2284,20 @@ export function useChatOrchestration(
       markdownLines.push("");
     }
 
-    downloadTextFile(
-      `${slug}-${timestamp}.json`,
-      JSON.stringify(exportPayload, null, 2),
-      "application/json;charset=utf-8",
-    );
-    downloadTextFile(
-      `${slug}-${timestamp}.md`,
-      markdownLines.join("\n"),
-      "text/markdown;charset=utf-8",
-    );
-    setNotice({ kind: "info", message: "Chat transcript exported (JSON + Markdown)." });
+    try {
+      const savedPath = await exportChatTranscript({
+        slug: `${slug}-${timestamp}`,
+        markdown: markdownLines.join("\n"),
+        json: JSON.stringify(exportPayload, null, 2),
+      });
+      if (!savedPath) {
+        return;
+      }
+    } catch (error) {
+      setNotice({ kind: "error", message: normalizeError(error) });
+      return;
+    }
+    setNotice({ kind: "info", message: "Chat transcript saved." });
   }, [
     activeCharacter?.name,
     activeChat,
@@ -2147,6 +2332,7 @@ export function useChatOrchestration(
     createGroup,
     updateGroup,
     sendMessage,
+    requestCharacterReply,
     startEditUserMessage,
     cancelEditUserMessage: cancelEditMessage,
     saveEditedUserMessage,

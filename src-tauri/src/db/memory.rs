@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::errors::{AppError, AppResult};
 use crate::types::{ChatMemoryRecord, MemorySnippetRecord, MessageRecord};
@@ -27,7 +27,7 @@ impl Database {
 
         let record = connection
             .query_row(
-                "SELECT chat_id, summary, facts_json, updated_at FROM chat_memory WHERE chat_id = ?1",
+                &format!("SELECT {CHAT_MEMORY_COLUMNS} FROM chat_memory WHERE chat_id = ?1"),
                 [id],
                 map_chat_memory_row,
             )
@@ -36,6 +36,8 @@ impl Database {
         Ok(record.unwrap_or(ChatMemoryRecord {
             chat_id: id.to_string(),
             summary: String::new(),
+            summary_auto: false,
+            summarized_through_message_id: None,
             facts_json: "[]".to_string(),
             facts: Vec::new(),
             updated_at: String::new(),
@@ -71,7 +73,7 @@ impl Database {
 
         let existing = transaction
             .query_row(
-                "SELECT chat_id, summary, facts_json, updated_at FROM chat_memory WHERE chat_id = ?1",
+                &format!("SELECT {CHAT_MEMORY_COLUMNS} FROM chat_memory WHERE chat_id = ?1"),
                 [id],
                 map_chat_memory_row,
             )
@@ -82,6 +84,15 @@ impl Database {
             .map(ToOwned::to_owned)
             .or_else(|| existing.as_ref().map(|record| record.summary.clone()))
             .unwrap_or_default();
+        // Saving different summary text takes ownership away from the background
+        // summariser and restarts its cursor; re-saving the same text keeps both.
+        let (next_summary_auto, next_through_message_id) = match existing.as_ref() {
+            Some(record) if record.summary == next_summary => (
+                record.summary_auto,
+                record.summarized_through_message_id.clone(),
+            ),
+            _ => (false, None),
+        };
         let next_facts_json = if let Some(value) = facts_json {
             normalize_facts_json(Some(value))?
         } else if let Some(existing) = existing.as_ref() {
@@ -93,18 +104,34 @@ impl Database {
 
         transaction.execute(
             "
-            INSERT INTO chat_memory (chat_id, summary, facts_json, updated_at)
-            VALUES (?1, ?2, ?3, ?4)
+            INSERT INTO chat_memory (
+                chat_id,
+                summary,
+                facts_json,
+                updated_at,
+                summary_auto,
+                summarized_through_message_id
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT(chat_id) DO UPDATE SET
                 summary = excluded.summary,
                 facts_json = excluded.facts_json,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                summary_auto = excluded.summary_auto,
+                summarized_through_message_id = excluded.summarized_through_message_id
             ",
-            params![id, next_summary, next_facts_json, now],
+            params![
+                id,
+                next_summary,
+                next_facts_json,
+                now,
+                next_summary_auto,
+                next_through_message_id
+            ],
         )?;
 
         let record = transaction.query_row(
-            "SELECT chat_id, summary, facts_json, updated_at FROM chat_memory WHERE chat_id = ?1",
+            &format!("SELECT {CHAT_MEMORY_COLUMNS} FROM chat_memory WHERE chat_id = ?1"),
             [id],
             map_chat_memory_row,
         )?;
@@ -113,6 +140,9 @@ impl Database {
         Ok(record)
     }
 
+    /// Lexical recall over a chat's history. The newest `exclude_recent_messages`
+    /// messages and the latest user message never come back: the prompt already
+    /// carries them, so recalling them would only repeat what the model sees.
     pub fn resolve_memory_snippets(
         &self,
         chat_id: &str,
@@ -120,6 +150,7 @@ impl Database {
         limit: usize,
         speaker_character_id: Option<&str>,
         retrieval_hints: Option<&str>,
+        exclude_recent_messages: usize,
     ) -> AppResult<Vec<MemorySnippetRecord>> {
         let clean_chat_id = chat_id.trim();
         if clean_chat_id.is_empty() {
@@ -170,7 +201,13 @@ impl Database {
         )?;
         let failure_pattern = format!("{}%", crate::GENERATION_FAILURE_PREFIX);
         let rows = statement.query_map(params![clean_chat_id, failure_pattern], map_message_row)?;
-        let candidates = rows.collect::<Result<Vec<_>, _>>()?;
+        let excluded_ids =
+            recall_excluded_message_ids(&connection, clean_chat_id, exclude_recent_messages)?;
+        let candidates = rows
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|candidate| !excluded_ids.contains(&candidate.id))
+            .collect::<Vec<_>>();
 
         let query_lower = clean_query.to_lowercase();
         let query_terms = tokenize_similarity_terms(&query_lower);
@@ -264,11 +301,53 @@ impl Database {
     }
 }
 
-fn map_chat_memory_row(row: &Row<'_>) -> rusqlite::Result<ChatMemoryRecord> {
+impl Database {
+    /// How many of a chat's newest messages memory recall skips. The prompt's
+    /// history window already holds them, so surfacing them as "recalled
+    /// memory" would only repeat the conversation back to the model.
+    pub(crate) const RECALL_EXCLUDED_RECENT_MESSAGES: usize = 8;
+}
+
+/// Ids that recall must not return: the newest `recent` messages of the chat
+/// plus its latest user message, which is the turn being answered.
+pub(super) fn recall_excluded_message_ids(
+    connection: &Connection,
+    chat_id: &str,
+    recent: usize,
+) -> AppResult<HashSet<String>> {
+    let mut excluded = HashSet::new();
+    if recent > 0 {
+        let mut statement = connection.prepare(
+            "SELECT id FROM messages WHERE chat_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2",
+        )?;
+        let ids = statement.query_map(params![chat_id, recent as i64], |row| {
+            row.get::<_, String>(0)
+        })?;
+        for id in ids {
+            excluded.insert(id?);
+        }
+    }
+    let latest_user: Option<String> = connection
+        .query_row(
+            "SELECT id FROM messages WHERE chat_id = ?1 AND LOWER(TRIM(role)) = 'user' ORDER BY created_at DESC, id DESC LIMIT 1",
+            [chat_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    excluded.extend(latest_user);
+    Ok(excluded)
+}
+
+pub(super) const CHAT_MEMORY_COLUMNS: &str =
+    "chat_id, summary, facts_json, updated_at, summary_auto, summarized_through_message_id";
+
+pub(super) fn map_chat_memory_row(row: &Row<'_>) -> rusqlite::Result<ChatMemoryRecord> {
     let facts_json: String = row.get(2)?;
     Ok(ChatMemoryRecord {
         chat_id: row.get(0)?,
         summary: row.get(1)?,
+        summary_auto: row.get::<_, i64>(4)? != 0,
+        summarized_through_message_id: row.get(5)?,
         facts: parse_facts_json_lossy(&facts_json),
         facts_json,
         updated_at: row.get(3)?,
@@ -682,7 +761,7 @@ fn contains_any_phrase(haystack: &str, phrases: &[&str]) -> bool {
         .any(|phrase| haystack.contains(phrase))
 }
 
-fn tokenize_similarity_terms(value: &str) -> Vec<String> {
+pub(super) fn tokenize_similarity_terms(value: &str) -> Vec<String> {
     tokenize_similarity_terms_internal(value, false)
 }
 
@@ -829,7 +908,7 @@ fn build_token_ngrams(tokens: &[String], n: usize) -> HashSet<String> {
     ngrams
 }
 
-fn dice_similarity_score(left: &HashSet<String>, right: &HashSet<String>) -> f64 {
+pub(super) fn dice_similarity_score(left: &HashSet<String>, right: &HashSet<String>) -> f64 {
     if left.is_empty() || right.is_empty() {
         return 0.0_f64;
     }
@@ -838,7 +917,7 @@ fn dice_similarity_score(left: &HashSet<String>, right: &HashSet<String>) -> f64
     (2.0_f64 * intersection) / (left.len() as f64 + right.len() as f64)
 }
 
-fn normalize_content_for_dedupe(content: &str) -> String {
+pub(super) fn normalize_content_for_dedupe(content: &str) -> String {
     let mut normalized = String::with_capacity(content.len());
     let mut in_whitespace = false;
 
@@ -856,4 +935,131 @@ fn normalize_content_for_dedupe(content: &str) -> String {
     }
 
     normalized.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    struct Fixture {
+        db: Database,
+        root: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("glee-memory-test-{}", Uuid::new_v4()));
+            let db = Database::new(root.join("test.sqlite3")).unwrap();
+            Self { db, root }
+        }
+
+        fn append(&self, chat_id: &str, role: &str, content: &str) -> MessageRecord {
+            self.db
+                .append_message_at_epoch(chat_id, role, content, None, None)
+                .unwrap()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn recalled_ids(f: &Fixture, chat_id: &str, query: &str, exclude_recent: usize) -> Vec<String> {
+        f.db.resolve_memory_snippets(chat_id, query, 12, None, None, exclude_recent)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.message_id)
+            .collect()
+    }
+
+    #[test]
+    fn lexical_recall_skips_the_recent_window() {
+        let f = Fixture::new();
+        let chat = f.db.create_chat("one", None).unwrap();
+        let old = f.append(
+            &chat.id,
+            "assistant",
+            "The lighthouse keeper owns a brass telescope.",
+        );
+        let recent = f.append(
+            &chat.id,
+            "assistant",
+            "The lighthouse keeper polishes the brass telescope.",
+        );
+        f.append(
+            &chat.id,
+            "user",
+            "Does the lighthouse keeper still have that telescope?",
+        );
+
+        assert_eq!(
+            recalled_ids(&f, &chat.id, "lighthouse keeper telescope", 2),
+            vec![old.id.clone()]
+        );
+        let mut with_recent = recalled_ids(&f, &chat.id, "lighthouse keeper telescope", 0);
+        with_recent.sort();
+        let mut expected = vec![old.id, recent.id];
+        expected.sort();
+        assert_eq!(with_recent, expected);
+    }
+
+    #[test]
+    fn lexical_recall_never_returns_the_latest_user_message() {
+        let f = Fixture::new();
+        let chat = f.db.create_chat("one", None).unwrap();
+        let earlier_user = f.append(&chat.id, "user", "My favorite tea is jasmine green tea.");
+        let latest_user = f.append(&chat.id, "user", "Remind me, what is my favorite tea?");
+        for index in 0..3 {
+            f.append(
+                &chat.id,
+                "assistant",
+                &format!("Filler reply number {index}."),
+            );
+        }
+
+        // Even with the recency window disabled, the question itself is not recalled.
+        let ids = recalled_ids(&f, &chat.id, "favorite tea", 0);
+        assert!(ids.contains(&earlier_user.id));
+        assert!(!ids.contains(&latest_user.id));
+    }
+
+    #[test]
+    fn lexical_recall_uses_the_default_window_for_short_chats() {
+        let f = Fixture::new();
+        let chat = f.db.create_chat("one", None).unwrap();
+        for index in 0..Database::RECALL_EXCLUDED_RECENT_MESSAGES {
+            f.append(
+                &chat.id,
+                "assistant",
+                &format!("Harbor fact {index}: the harbor bell rings at dusk."),
+            );
+        }
+
+        assert!(recalled_ids(
+            &f,
+            &chat.id,
+            "harbor bell",
+            Database::RECALL_EXCLUDED_RECENT_MESSAGES
+        )
+        .is_empty());
+        f.append(
+            &chat.id,
+            "assistant",
+            "Unrelated newer message about weather.",
+        );
+        assert_eq!(
+            recalled_ids(
+                &f,
+                &chat.id,
+                "harbor bell",
+                Database::RECALL_EXCLUDED_RECENT_MESSAGES
+            )
+            .len(),
+            1
+        );
+    }
 }

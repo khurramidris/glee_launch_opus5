@@ -1,8 +1,11 @@
 import { useCallback, useEffect } from "react";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   createDatabaseBackup,
+  exportDatabaseBackup,
   exportDiagnosticsBundle,
   getDiagnosticsSnapshot,
+  importDatabaseBackup,
   listDatabaseBackups,
   restoreDatabaseBackup,
 } from "../../api/tauri";
@@ -96,6 +99,50 @@ export function useDiagnostics() {
     }
   }, [setNotice, setRestoringDatabase]);
 
+  /** Lets the user save one of Glee's backups wherever they like. */
+  const saveBackupCopy = useCallback(
+    async (fileName: string) => {
+      try {
+        const selected = await save({
+          defaultPath: fileName,
+          filters: [{ name: "Glee backup", extensions: ["sqlite3"] }],
+        });
+        if (typeof selected !== "string") {
+          return;
+        }
+        const destination = selected.toLowerCase().endsWith(".sqlite3")
+          ? selected
+          : `${selected}.sqlite3`;
+        await exportDatabaseBackup(fileName, destination);
+        setNotice({ kind: "info", message: "Backup copy saved." });
+      } catch (error) {
+        setNotice({ kind: "error", message: normalizeError(error) });
+      }
+    },
+    [setNotice],
+  );
+
+  /** Adds a backup file from another place to the list so it can be restored. */
+  const addBackupFromFile = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Glee backup", extensions: ["sqlite3"] }],
+      });
+      if (typeof selected !== "string") {
+        return;
+      }
+      await importDatabaseBackup(selected);
+      setDatabaseBackups(await listDatabaseBackups());
+      setNotice({
+        kind: "info",
+        message: "Backup added. Choose Restore next to it to use it.",
+      });
+    } catch (error) {
+      setNotice({ kind: "error", message: normalizeError(error) });
+    }
+  }, [setDatabaseBackups, setNotice]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -138,5 +185,7 @@ export function useDiagnostics() {
     exportBundle,
     backupDatabase,
     restoreDatabase,
+    saveBackupCopy,
+    addBackupFromFile,
   };
 }

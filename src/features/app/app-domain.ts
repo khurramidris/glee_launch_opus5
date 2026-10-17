@@ -1,3 +1,6 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { saveTextFile } from "../../api/tauri";
 import {
   buildExportSlug as buildExportSlugCore,
   sortByRecent as sortByRecentCore,
@@ -208,11 +211,61 @@ export function resolveActivePresetId<T extends { id: string }>(
   return "";
 }
 
-export function downloadTextFile(
+/**
+ * Asks where to save a chat transcript and writes it as Markdown or JSON,
+ * whichever file type the user picks. Resolves to the saved path, or null if
+ * the user cancelled.
+ */
+export async function exportChatTranscript(input: {
+  slug: string;
+  markdown: string;
+  json: string;
+}): Promise<string | null> {
+  if (!isTauri()) {
+    await downloadTextFile(`${input.slug}.md`, input.markdown, "text/markdown;charset=utf-8");
+    return `${input.slug}.md`;
+  }
+  const selected = await save({
+    defaultPath: `${input.slug}.md`,
+    filters: [
+      { name: "Readable transcript (Markdown)", extensions: ["md"] },
+      { name: "Data (JSON)", extensions: ["json"] },
+    ],
+  });
+  if (typeof selected !== "string") {
+    return null;
+  }
+  const asJson = selected.toLowerCase().endsWith(".json");
+  const path = asJson || selected.toLowerCase().endsWith(".md") ? selected : `${selected}.md`;
+  const saved = await saveTextFile({ path, content: asJson ? input.json : input.markdown });
+  return saved.path;
+}
+
+/**
+ * Saves text through the system "Save as" dialog inside the desktop app (so the
+ * user picks where it goes) and falls back to a browser download elsewhere.
+ * Resolves to the saved path, or null when the user cancelled.
+ */
+export async function downloadTextFile(
   filename: string,
   content: string,
   contentType: string,
-): void {
+): Promise<string | null> {
+  if (isTauri()) {
+    const extension = filename.includes(".") ? filename.split(".").pop() ?? "txt" : "txt";
+    const selected = await save({
+      defaultPath: filename,
+      filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
+    });
+    if (typeof selected !== "string") {
+      return null;
+    }
+    const saved = await saveTextFile({
+      path: selected.toLowerCase().endsWith(`.${extension}`) ? selected : `${selected}.${extension}`,
+      content,
+    });
+    return saved.path;
+  }
   const blob = new Blob([content], { type: contentType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -220,6 +273,7 @@ export function downloadTextFile(
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+  return filename;
 }
 
 export type { GenerationPreset };

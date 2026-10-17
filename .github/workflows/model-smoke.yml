@@ -9,6 +9,8 @@ on:
       - src-tauri/resources/manifest.json
       - src-tauri/src/runtime_selection.rs
       - src/features/chat/**
+      - tests/evals/**
+      - vitest.eval.config.ts
       - scripts/resources.mjs
       - .github/workflows/model-smoke.yml
   schedule:

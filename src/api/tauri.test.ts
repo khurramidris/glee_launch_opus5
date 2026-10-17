@@ -52,6 +52,19 @@ describe("tauri api mapping", () => {
       updated_at: "2000-01-01T00:00:00.000Z",
     });
     expect(memory.facts).toEqual(["alpha", "beta"]);
+    expect(memory.summaryAuto).toBe(false);
+    expect(memory.summarizedThroughMessageId).toBeNull();
+
+    const automatic = __testing.mapChatMemory({
+      chat_id: "chat-1",
+      summary: "  written by the app ",
+      summary_auto: true,
+      summarized_through_message_id: "msg-9",
+      updated_at: "2000-01-01T00:00:00.000Z",
+    });
+    expect(automatic.summary).toBe("written by the app");
+    expect(automatic.summaryAuto).toBe(true);
+    expect(automatic.summarizedThroughMessageId).toBe("msg-9");
 
     const context = __testing.mapContextEntry({
       id: "ctx-1",
@@ -65,6 +78,36 @@ describe("tauri api mapping", () => {
     });
     expect(context.keywords).toEqual(["rain", "city"]);
     expect(context.enabled).toBe(true);
+  });
+
+  it("maps auto summary batches", () => {
+    const batch = __testing.mapAutoSummaryBatch({
+      chat_id: "chat-1",
+      history_epoch: 2,
+      writable: true,
+      previous_summary: " earlier ",
+      summarized_through_message_id: null,
+      pending_count: 13,
+      messages: [
+        {
+          id: "msg-1",
+          chat_id: "chat-1",
+          role: "user",
+          content: "hello",
+          speaker_character_id: null,
+          created_at: "2000-01-01T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(batch).toMatchObject({
+      chatId: "chat-1",
+      historyEpoch: 2,
+      writable: true,
+      previousSummary: "earlier",
+      summarizedThroughMessageId: null,
+      pendingCount: 13,
+    });
+    expect(batch.messages[0]).toMatchObject({ id: "msg-1", role: "user" });
   });
 
   it("maps diagnostics snapshots into camelCase frontend types", () => {

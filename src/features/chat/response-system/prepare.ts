@@ -398,6 +398,16 @@ function extractExplicitUserChoice(input: {
         /\bi\s+(?:think\s+)?(?:(?:am|m)\s+gonna|(?:am|m)\s+going\s+to|will|would\s+like(?:\s+to)?|would\s+love(?:\s+to)?|want(?:\s+to)?|wanna)\s+(?:have|get|buy|order|take)?\s*([^,.!?;\n]+)/i,
     },
     {
+      kind: "preference",
+      regex:
+        /\bi['’]ll\s+(?:have|get|buy|order|take|go\s+with|pick|choose)\s+([^,.!?;\n]+)/i,
+    },
+    {
+      kind: "preference",
+      regex:
+        /\bi['’](?:d\s+(?:like|love)(?:\s+to)?|m\s+(?:gonna|going\s+to))\s+(?:have|get|buy|order|take)?\s*([^,.!?;\n]+)/i,
+    },
+    {
       kind: "selection",
       regex: /\bi\s+(?:choose|pick|prefer)\s+([^,.!?;\n]+)/i,
     },
@@ -949,7 +959,6 @@ export function prepareResponseRequest(
   context.salienceProfile = salienceProfile;
   const reactionPlan = buildCharacterReactionPlan(context);
   const compiledPrompt = compileResponseRequest({
-    runtimeModel: input.runtime.model,
     speaker: context.speaker,
     userProfile: context.userProfile,
     relationshipState: context.relationshipState,
@@ -964,21 +973,29 @@ export function prepareResponseRequest(
     history: context.history,
     sceneState,
     turnInterpretation,
-    turnFrame: context.turnFrame,
-    responsePlan: context.responsePlan,
+    explicitUserChoice: context.explicitUserChoice,
     groupRoundState: context.groupRoundState,
-    reactionPlan,
-    salienceProfile,
   });
-  const runtimeRequest = toLlamaChatRequest({
-    model: input.runtime.model,
-    compiledPrompt,
-    sampling: {
-      ...input.sampling,
-    },
-    stream: input.runtime.stream,
-    userName: context.userProfile?.name?.trim() || "you",
-  });
+  // Rebuilt with extra per-turn note lines when an extension contributes any;
+  // the stable system message is the same either way.
+  const buildRuntimeRequest = (turnNotes?: readonly string[]) =>
+    toLlamaChatRequest({
+      model: input.runtime.model,
+      compiledPrompt,
+      sampling: {
+        ...input.sampling,
+      },
+      stream: input.runtime.stream,
+      userName: context.userProfile?.name?.trim() || "you",
+      ...(context.mode === "group"
+        ? {
+            speakerName: context.speaker?.name,
+            participantNames: context.participantNames,
+          }
+        : {}),
+      turnNotes,
+    });
+  const runtimeRequest = buildRuntimeRequest();
 
   return {
     context,
@@ -996,5 +1013,6 @@ export function prepareResponseRequest(
     },
     compiledPrompt,
     runtimeRequest,
+    buildRuntimeRequest,
   };
 }

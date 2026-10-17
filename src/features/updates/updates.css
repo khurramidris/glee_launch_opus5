@@ -1,0 +1,94 @@
+.update-banner {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--yellow-soft);
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.update-banner-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.update-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.update-banner-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.update-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.update-banner-link {
+  text-decoration: none;
+}
+
+.update-banner-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.update-banner-progress progress {
+  flex: 1;
+  height: 8px;
+}
+
+.update-banner-note,
+.update-banner-error,
+.update-banner-notes p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.update-banner-error {
+  color: var(--danger);
+}
+
+.update-banner-notes {
+  display: grid;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  color: var(--text-soft);
+}
+
+.update-note-bullet::before {
+  content: "• ";
+}
+
+.update-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.update-settings-result {
+  color: var(--muted-strong);
+  font-size: 12px;
+}

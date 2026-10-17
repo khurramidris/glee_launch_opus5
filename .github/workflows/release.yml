@@ -29,6 +29,7 @@ jobs:
             test "${GITHUB_REF_NAME}" = "v${version}" || { echo "::error::Tag ${GITHUB_REF_NAME} does not match version v${version}"; exit 1; }
           fi
       - run: node scripts/resources.mjs check
+      - run: node scripts/update-source.mjs check
 
   build:
     name: Build (${{ matrix.name }})
@@ -63,6 +64,9 @@ jobs:
       - name: Use the download mirror when configured
         if: vars.GLEE_DOWNLOAD_MIRROR != ''
         run: node scripts/resources.mjs set-mirror "${{ vars.GLEE_DOWNLOAD_MIRROR }}"
+      - name: Point update checks at this repository's releases
+        shell: bash
+        run: node scripts/update-source.mjs set "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json"
       - name: Load optional signing credentials
         shell: bash
         env:
@@ -102,3 +106,36 @@ jobs:
             ### First launch on an unsigned build
             - **Windows:** if SmartScreen says "Windows protected your PC", click **More info → Run anyway**.
             - **macOS:** if macOS says Glee can't be opened, open **System Settings → Privacy & Security** and click **Open Anyway**.
+
+  update-manifest:
+    name: Publish update manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Generate latest.json and attach it to the draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MIN_SUPPORTED_VERSION: ${{ vars.GLEE_MIN_SUPPORTED_VERSION }}
+        run: |
+          # Draft releases have no tag URL, so find the draft in the release list.
+          version=$(node -p "require('./package.json').version")
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq "[.[] | select(.draft and .tag_name == \"v${version}\")][0] // empty" > release.json
+          test -s release.json || { echo "::error::No draft release found for v${version}"; exit 1; }
+          node scripts/make-update-manifest.mjs --release release.json --repo "${GITHUB_REPOSITORY}" \
+            --out latest.json --min-supported "${MIN_SUPPORTED_VERSION}"
+          # Replace an older latest.json (for example after re-running the workflow).
+          for id in $(jq -r '.assets[] | select(.name == "latest.json") | .id' release.json); do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${id}"
+          done
+          upload_url=$(jq -r '.upload_url' release.json | sed 's/{.*}//')
+          curl --fail --silent --show-error -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "${upload_url}?name=latest.json"

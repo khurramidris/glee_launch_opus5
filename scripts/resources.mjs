@@ -11,6 +11,8 @@
 //   node scripts/resources.mjs smoke [--eval]
 //       Download this platform's model and engine, start llama-server with the
 //       app's launch flags, and check chat, streaming, auth, and embeddings.
+//       --eval also sends Glee's real prompts through the model and fails when
+//       fewer than GLEE_MODEL_EVAL_MIN_PASS_RATE (default 0.8) of the cases pass.
 
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -178,14 +180,33 @@ function answerLooksRight(answer) {
 
 function reportEvalCases(reportFile) {
   if (!existsSync(reportFile)) return;
-  for (const item of JSON.parse(readFileSync(reportFile, "utf8")).cases ?? []) {
-    notice(`eval ${item.id}`, [
-      `pass=${item.mechanicalPass} accepted=${item.accepted} repaired=${item.repaired} score=${item.qualityScore} ${item.latencyMs}ms, ~${item.estimatedInputTokens} input tokens`,
-      `reasons: ${(item.reasons ?? []).join("; ") || "none"}`,
-      `raw: ${JSON.stringify((item.rawOutput ?? "").slice(0, 400))}`,
-      `final: ${JSON.stringify((item.finalOutput ?? "").slice(0, 400))}`,
+  const report = JSON.parse(readFileSync(reportFile, "utf8"));
+  const cases = report.cases ?? [];
+  const summary = report.summary;
+  const percent = (value) => `${Math.round((value ?? 0) * 100)}%`;
+  if (summary) {
+    notice("eval summary", [
+      `${summary.passedCount}/${summary.caseCount} cases passed (${percent(summary.passRate)}, minimum ${percent(summary.minPassRate)}), ${summary.errorCount} errored`,
+      `accepted ${percent(summary.acceptedRate)}, repaired ${percent(summary.repairedRate)}, rejected ${summary.rejectedCount}`,
+      `latency median ${summary.medianLatencyMs}ms, p90 ${summary.p90LatencyMs}ms`,
+      `average input ~${summary.avgEstimatedInputTokens} tokens${summary.avgPromptTokens == null ? "" : ` (${summary.avgPromptTokens} counted by the server)`}`,
     ].join("\n"));
   }
+  // GitHub caps the annotations a step can show, so only the first failures
+  // become notices and every case is listed in the collapsible log group.
+  const describe = (item) => [
+    `pass=${item.mechanicalPass} accepted=${item.accepted} repaired=${item.repaired} score=${item.qualityScore} ${item.latencyMs}ms, ~${item.estimatedInputTokens} input tokens`,
+    `failures: ${(item.mechanicalFailures ?? []).join("; ") || "none"}`,
+    `reasons: ${(item.reasons ?? []).join("; ") || "none"}`,
+    `raw: ${JSON.stringify((item.rawOutput ?? "").slice(0, 400))}`,
+    `final: ${JSON.stringify((item.finalOutput ?? "").slice(0, 400))}`,
+  ].join("\n");
+  for (const item of cases.filter((entry) => !entry.mechanicalPass).slice(0, 3)) {
+    notice(`eval ${item.id}`, describe(item));
+  }
+  if (process.env.GITHUB_ACTIONS) console.log("::group::eval cases");
+  for (const item of cases) console.log(`eval ${item.id}: ${describe(item)}`);
+  if (process.env.GITHUB_ACTIONS) console.log("::endgroup::");
 }
 
 async function smoke({ runEval }) {
@@ -288,7 +309,7 @@ async function smoke({ runEval }) {
       } finally {
         reportEvalCases(reportFile);
       }
-      notice("eval passed", "Glee's prompt pipeline produced accepted replies from the shipped model");
+      notice("eval passed", "Glee's prompt pipeline met the minimum pass rate with the shipped model");
     }
   } finally {
     chatServer.kill();

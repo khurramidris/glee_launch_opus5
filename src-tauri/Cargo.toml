@@ -1,6 +1,6 @@
 [package]
 name = "glee-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Private, offline AI character chat for the desktop"
 authors = ["The Glee Contributors"]
 edition = "2021"
@@ -36,6 +36,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio = { version = "1", features = ["fs", "net", "process", "sync", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
+semver = "1"
 chrono = { version = "0.4", features = ["serde", "clock"] }
 thiserror = "2"
 base64 = "0.22"

@@ -992,6 +992,114 @@ function sanitizeTranscriptWithRoles(
   return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function countOccurrences(text: string, character: string): number {
+  return text.split(character).length - 1;
+}
+
+// A dangling mark is an opener when nothing follows it; it is dropped. When
+// text follows an unmatched opener, the mark is closed at the end instead.
+// An unmatched mark that ends the text right after a word is a closer whose
+// opener was a stray earlier mark, so it is left alone.
+function balanceSymmetricMark(text: string, mark: string): string {
+  if (countOccurrences(text, mark) % 2 === 0) {
+    return text;
+  }
+  const lastIndex = text.lastIndexOf(mark);
+  const after = text.slice(lastIndex + mark.length).trim();
+  if (after) {
+    return `${text}${mark}`;
+  }
+  const before = text.slice(0, lastIndex);
+  if (before === "" || /\s$/.test(before)) {
+    return before.trimEnd();
+  }
+  return text;
+}
+
+// Closes a quote or asterisk the model left open, so a reply that merely ends
+// inside dialogue or an action is not mistaken for a broken one.
+export function balanceDanglingMarkup(text: string): string {
+  let next = text.trim();
+  if (!next) {
+    return next;
+  }
+
+  const missingCurlyClosers = countOccurrences(next, "“") - countOccurrences(next, "”");
+  if (missingCurlyClosers > 0) {
+    const lastOpener = next.lastIndexOf("“");
+    if (!next.slice(lastOpener + 1).trim()) {
+      next = next.slice(0, lastOpener).trimEnd();
+    } else {
+      next = `${next}${"”".repeat(missingCurlyClosers)}`;
+    }
+  }
+
+  // Close whichever mark was opened last first so nesting stays well formed.
+  const marks = ['"', "*"]
+    .map((mark) => ({ mark, index: next.lastIndexOf(mark) }))
+    .filter(
+      ({ mark, index }) => index >= 0 && countOccurrences(next, mark) % 2 === 1,
+    )
+    .sort((left, right) => right.index - left.index);
+  for (const { mark } of marks) {
+    next = balanceSymmetricMark(next, mark);
+  }
+  return next.trim();
+}
+
+const NON_TERMINAL_ABBREVIATIONS = new Set([
+  "mr",
+  "mrs",
+  "ms",
+  "dr",
+  "st",
+  "vs",
+  "etc",
+  "no",
+  "jr",
+  "sr",
+]);
+const MIN_TRIMMED_REPLY_LETTERS = 3;
+
+// Cuts a reply the runtime stopped at its token limit back to its last
+// complete sentence (or paragraph) and closes any dialogue or action it left
+// open. A reply with no clean boundary is kept whole rather than emptied.
+export function trimTruncatedReply(text: string): string {
+  const full = text.replace(/\s+$/, "");
+  if (!full.trim()) {
+    return "";
+  }
+
+  const boundary = /[.!?…]+["”’)\]*_]*(?=\s|$)/g;
+  let cutAt = -1;
+  for (const match of full.matchAll(boundary)) {
+    const end = match.index + match[0].length;
+    const precedingWord = /([A-Za-z]+)$/.exec(full.slice(0, match.index))?.[1];
+    if (
+      precedingWord &&
+      match[0].startsWith(".") &&
+      NON_TERMINAL_ABBREVIATIONS.has(precedingWord.toLowerCase())
+    ) {
+      continue;
+    }
+    cutAt = end;
+  }
+
+  let trimmed = full;
+  if (cutAt >= 0 && cutAt < full.length) {
+    trimmed = full.slice(0, cutAt);
+  } else if (cutAt < 0) {
+    const paragraphBreak = full.lastIndexOf("\n\n");
+    if (paragraphBreak > 0) {
+      trimmed = full.slice(0, paragraphBreak);
+    }
+  }
+  if ((trimmed.match(/[\p{L}\p{N}]/gu) ?? []).length < MIN_TRIMMED_REPLY_LETTERS) {
+    trimmed = full;
+  }
+  return balanceDanglingMarkup(trimmed);
+}
+
 export function sanitizeAssistantReply(
   raw: string,
   options?: AssistantSanitizeOptions,
@@ -1021,7 +1129,7 @@ export function sanitizeAssistantReply(
   next = normalizeSafeQuotedAttributions(next, options?.speakerName);
   next = normalizeMalformedRoleplayFormatting(next, options?.speakerName);
   next = normalizeReplySpacing(next);
-  return next.trim();
+  return balanceDanglingMarkup(next).trim();
 }
 
 export function sanitizeAssistantHistoryContent(
@@ -1043,12 +1151,56 @@ export function sanitizeAssistantHistoryContent(
 
 export const LLAMA_STOP_SEQUENCES = ["\nUser:", "\nHuman:", "\nYou:", "\nMe:"];
 
-export function buildLlamaStopSequences(options?: AssistantSanitizeOptions): string[] {
+export interface LlamaStopSequenceOptions extends AssistantSanitizeOptions {
+  // Everyone in a group chat. Names other than the speaker's become stop
+  // strings so the model cannot go on to script their lines.
+  participantNames?: string[];
+}
+
+// Full names plus a first name that no other participant shares, which is how
+// the model usually labels a line.
+function buildOtherParticipantStopNames(options?: LlamaStopSequenceOptions): string[] {
+  const everyone = (options?.participantNames ?? [])
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const firstTokenCounts = new Map<string, number>();
+  for (const name of everyone) {
+    const firstToken = name.split(/\s+/)[0]?.toLowerCase() ?? "";
+    firstTokenCounts.set(firstToken, (firstTokenCounts.get(firstToken) ?? 0) + 1);
+  }
+  const excluded = new Set(
+    [options?.speakerName, options?.userName]
+      .map((name) => name?.trim().toLowerCase())
+      .filter((name): name is string => Boolean(name)),
+  );
+  const speakerFirstToken = options?.speakerName?.trim().split(/\s+/)[0]?.toLowerCase();
+  const names: string[] = [];
+  for (const name of everyone) {
+    if (name.toLowerCase() === options?.speakerName?.trim().toLowerCase()) {
+      continue;
+    }
+    names.push(name);
+    const firstToken = name.split(/\s+/)[0] ?? "";
+    if (
+      firstToken !== name &&
+      firstToken.length >= 3 &&
+      firstTokenCounts.get(firstToken.toLowerCase()) === 1 &&
+      firstToken.toLowerCase() !== speakerFirstToken
+    ) {
+      names.push(firstToken);
+    }
+  }
+  return names.filter((name) => !excluded.has(name.toLowerCase()));
+}
+
+export function buildLlamaStopSequences(options?: LlamaStopSequenceOptions): string[] {
+  const names = [
+    ...buildStopSequenceNameCandidates(options?.userName),
+    ...buildOtherParticipantStopNames(options),
+  ];
   return [
     ...LLAMA_STOP_SEQUENCES,
-    ...buildStopSequenceNameCandidates(options?.userName).map(
-      (name) => `\n${name}:`,
-    ),
+    ...[...new Set(names)].map((name) => `\n${name}:`),
   ];
 }
 

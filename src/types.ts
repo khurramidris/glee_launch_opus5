@@ -26,6 +26,7 @@ export interface ResourceStatus {
   platform: string;
   platformSupported: boolean;
   missingRequiredBytes: number;
+  partialRequiredBytes: number;
   items: ResourceStatusItem[];
 }
 
@@ -111,8 +112,25 @@ export interface ChatMessage {
 export interface ChatMemory {
   chatId: string;
   summary: string;
+  /** True while the summary text was written by the background summariser. */
+  summaryAuto?: boolean;
+  /** Last message folded into an automatic summary. */
+  summarizedThroughMessageId?: string | null;
   facts: string[];
   updatedAt: string;
+}
+
+export interface AutoSummaryBatch {
+  chatId: string;
+  historyEpoch: number;
+  /** False when the user owns the current summary text. */
+  writable: boolean;
+  previousSummary: string;
+  summarizedThroughMessageId: string | null;
+  /** Older messages still waiting to be summarised, across all batches. */
+  pendingCount: number;
+  /** Next slice of those messages, oldest first, capped to a character budget. */
+  messages: ChatMessage[];
 }
 
 export interface UserProfile {
@@ -149,7 +167,10 @@ export interface BootstrapState {
 
 export interface MemorySnippet {
   chatId: string;
+  /** Chat message id, or `memory-item:<id>` when the snippet is a remembered item. */
   messageId?: string;
+  /** `memory-item` for long-term memory items; absent for recalled chat messages. */
+  source?: "memory-item";
   role: MessageRole;
   content: string;
   speakerCharacterId?: string;
@@ -327,7 +348,24 @@ export interface GenerationPreset {
 export interface ChatPresetProfile {
   chatId: string;
   generationPresetId?: string;
+  personaPresetId?: string;
   updatedAt: string;
+}
+
+/** A saved identity the user can play in a chat instead of the default profile. */
+export interface Persona {
+  id: string;
+  name: string;
+  about: string;
+  preferences: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersonaDraft {
+  name: string;
+  about: string;
+  preferences: string;
 }
 
 export interface ChatCompletionDelta {
@@ -588,4 +626,112 @@ export interface LlamaChatCompletionResponse {
     completion_tokens?: number;
     total_tokens?: number;
   };
+}
+
+export type MemoryScope = "user" | "character" | "chat";
+
+export type MemoryKind = "fact" | "preference" | "event" | "relationship" | "promise";
+
+/** A durable statement the characters remember; scope decides who may recall it. */
+export interface MemoryItem {
+  id: string;
+  scope: MemoryScope;
+  /** Owner of a `character` item. */
+  characterId?: string;
+  /** Owner of a `chat` item. */
+  chatId?: string;
+  kind: MemoryKind;
+  content: string;
+  /** 1 (minor) to 5 (essential). */
+  importance: number;
+  pinned: boolean;
+  sourceMessageId?: string;
+  createdAt: string;
+  updatedAt: string;
+  lastRecalledAt?: string;
+  recallCount: number;
+  archived: boolean;
+}
+
+export interface ListMemoryItemsPayload {
+  scope?: MemoryScope;
+  characterId?: string;
+  chatId?: string;
+  includeArchived?: boolean;
+  /** Everything one chat can recall: user items, its characters' items, its own items. */
+  visibleInChat?: string;
+}
+
+export interface CreateMemoryItemPayload {
+  scope: MemoryScope;
+  characterId?: string;
+  chatId?: string;
+  kind?: MemoryKind;
+  content: string;
+  importance?: number;
+  pinned?: boolean;
+  sourceMessageId?: string;
+}
+
+export interface UpdateMemoryItemPayload {
+  id: string;
+  content?: string;
+  importance?: number;
+  pinned?: boolean;
+  archived?: boolean;
+  kind?: MemoryKind;
+  scope?: MemoryScope;
+  characterId?: string;
+  chatId?: string;
+}
+
+/** Name exactly one: a character, a chat, or the `user` scope. */
+export interface DeleteMemoryItemsForPayload {
+  scope?: "user";
+  characterId?: string;
+  chatId?: string;
+}
+
+export interface MemoryExtractionBatch {
+  chatId: string;
+  historyEpoch: number;
+  /** True once enough new messages piled up for an extraction run. */
+  ready: boolean;
+  pendingCount: number;
+  lastMessageId?: string;
+  participants: Array<{ id: string; name: string }>;
+  /** Newest unprocessed messages, oldest first. */
+  messages: ChatMessage[];
+  /** Existing items the new messages may overlap with. */
+  relatedItems: MemoryItem[];
+}
+
+export interface MemoryExtractionAdd {
+  scope: MemoryScope;
+  characterId?: string;
+  kind: MemoryKind;
+  content: string;
+  importance: number;
+}
+
+export interface MemoryExtractionUpdate {
+  id: string;
+  content?: string;
+  importance?: number;
+}
+
+export interface StoreMemoryExtractionPayload {
+  chatId: string;
+  throughMessageId: string;
+  expectedHistoryEpoch?: number;
+  add: MemoryExtractionAdd[];
+  update: MemoryExtractionUpdate[];
+  remove: string[];
+}
+
+export interface MemoryExtractionOutcome {
+  added: MemoryItem[];
+  updated: MemoryItem[];
+  removed: string[];
+  skipped: number;
 }

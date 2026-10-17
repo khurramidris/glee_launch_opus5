@@ -23,6 +23,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   clearChatHistory as clearChatHistoryApi,
   deleteChat as deleteChatApi,
+  deleteMessage as deleteMessageApi,
+  getChatMemory,
+  renameChat,
 } from "./api/tauri";
 import gleeWordmark from "./assets/brand/glee-wordmark-approved-512w.png";
 import {
@@ -65,6 +68,23 @@ import {
   summarizeDiagnostics,
 } from "./features/diagnostics/diagnostics-domain";
 import { emptyMemory, normalizeError, sortChatsByRecent } from "./features/app/app-domain";
+import { MemoryManager } from "./features/memory/memory-manager";
+import { useMemoryItems } from "./features/memory/use-memory-items";
+import { PersonaManager } from "./features/personas/persona-manager";
+import { PersonaPicker } from "./features/personas/persona-picker";
+import { SetupBanner } from "./features/bootstrap/setup-banner";
+import { UpdateBanner } from "./features/updates/update-banner";
+import { UpdateSettingsSection } from "./features/updates/update-settings-section";
+import { useUpdates } from "./features/updates/use-updates";
+import { useResourceSetup } from "./features/bootstrap/use-resource-setup";
+import { GroupReplyControls } from "./features/chat/group-reply-controls";
+import {
+  ComposerExtensionTools,
+  ExtensionSettings,
+  MessageExtensionActions,
+} from "./features/extensions/extension-slots";
+import { useRegisteredCommands } from "./extensions/react";
+import { usePersonas } from "./features/personas/use-personas";
 import {
   useAppStore,
   useCharacterStore,
@@ -78,8 +98,10 @@ import { createEmptyDraft, draftFromCharacter } from "./stores/character-store";
 import { createEmptyRelationshipState } from "./stores/profile-store";
 import type {
   Character,
+  ChatMessage,
   ChatSummary,
   ModelDownloadProgress,
+  RuntimePerformanceMode,
   RuntimeState,
 } from "./types";
 import "./App.css";
@@ -100,7 +122,6 @@ const CHARACTER_COLORS = [
 
 const CHARACTER_EMOJIS = ["🌸", "🧠", "🎨", "🚀", "⚡", "🌿", "🎭", "🔥"];
 const SAFE_RUNTIME_CONTEXT_SIZE = 8192;
-const POWER_CONTROLS_ENABLED = import.meta.env.VITE_GLEE_POWER_CONTROLS === "1";
 
 type LibraryTab = "characters" | "chats";
 type WorkspaceMode = "hub" | "character" | "chat";
@@ -682,6 +703,7 @@ export default function App() {
     setMessagesByChat,
     setParticipantsByChat,
     setMemoryByChat,
+    setMessageActionBusyId,
     setGroupBuilderOpen,
     setGroupTitle,
     setGroupSelection,
@@ -705,8 +727,21 @@ export default function App() {
     generationPresetDraft,
     savingGenerationPreset,
     deletingPresetKey,
+    presetProfileByChat,
     setGenerationPresetDraft,
   } = usePresetStore();
+  const {
+    personas,
+    editingPersonaId,
+    personaDraft,
+    savingPersona,
+    setPersonaDraft,
+    startCreatePersona,
+    startEditPersona,
+    savePersona,
+    removePersona,
+    choosePersonaForChat,
+  } = usePersonas();
 
   useBootstrap();
 
@@ -753,6 +788,9 @@ export default function App() {
   const [openCharacterMenuId, setOpenCharacterMenuId] = useState<string | null>(null);
   const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
   const [characterActionMenuOpen, setCharacterActionMenuOpen] = useState(false);
+  const [responderChoiceByChat, setResponderChoiceByChat] = useState<Record<string, string[]>>({});
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [firstRunSetupActive, setFirstRunSetupActive] = useState(false);
   const [firstRunSetupDismissed, setFirstRunSetupDismissed] = useState(false);
   const [groupEditTitle, setGroupEditTitle] = useState("");
@@ -774,7 +812,33 @@ export default function App() {
     startSelectedRuntime: onStartRuntime,
     stopSelectedRuntime: onStopRuntime,
     cancelModelDownload: onCancelModelDownload,
+    runtimeSettings,
+    setPerformanceMode: onSetPerformanceMode,
   } = useRuntimeManagement();
+  useUpdates();
+  const chatMemory = useMemoryItems({ chatId: activeChatId, enabled: Boolean(activeChatId) });
+  const allMemory = useMemoryItems({ includeArchived: true, enabled: settingsOpen });
+  const memoryCharacters = useMemo(
+    () => characters.map((character) => ({ id: character.id, name: character.name })),
+    [characters],
+  );
+  const memoryChatTitles = useMemo(
+    () => Object.fromEntries(chats.map((chat) => [chat.id, chat.title])),
+    [chats],
+  );
+  const resourceSetup = useResourceSetup(async () => {
+    await onRefreshModelLibrary();
+  });
+  const onChangePerformanceMode = useCallback(
+    async (mode: RuntimePerformanceMode) => {
+      await onSetPerformanceMode(mode);
+      if (runtime.status === "running") {
+        await onStopRuntime();
+        await onStartRuntime();
+      }
+    },
+    [onSetPerformanceMode, onStartRuntime, onStopRuntime, runtime.status],
+  );
   const {
     saveCurrentCharacter,
     importCharacterCard: onImportCharacterCard,
@@ -820,6 +884,8 @@ export default function App() {
     exportBundle: onExportDiagnostics,
     backupDatabase: onBackupDatabase,
     restoreDatabase: onRestoreDatabase,
+    saveBackupCopy: onSaveBackupCopy,
+    addBackupFromFile: onAddBackupFromFile,
   } = useDiagnostics();
   const {
     activeChat,
@@ -831,6 +897,7 @@ export default function App() {
     createGroup: createGroupChatFromSelection,
     updateGroup: onUpdateGroupChat,
     sendMessage: onSendMessage,
+    requestCharacterReply: onRequestCharacterReply,
     startEditUserMessage: onStartEditUserMessage,
     cancelEditUserMessage: onCancelEditUserMessage,
     saveEditedUserMessage: onSaveEditedUserMessage,
@@ -1132,6 +1199,7 @@ export default function App() {
     detailScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
   }, [activeChatId, detailLeadCharacter?.id, detailTab, shellMode]);
 
+  const extensionCommands = useRegisteredCommands();
   const commandActions: CommandAction[] = (() => {
     const actions: CommandAction[] = [
       {
@@ -1215,28 +1283,26 @@ export default function App() {
       },
     ];
 
-    if (POWER_CONTROLS_ENABLED) {
-      actions.unshift(
-        {
-          id: 'import-model',
-          label: 'Import Model',
-          hint: 'Load GGUF file',
-          run: () => onImportModel(),
-        },
-        {
-          id: 'start-runtime',
-          label: 'Start AI Model',
-          hint: 'Retry local inference',
-          run: () => onStartRuntime(),
-        },
-        {
-          id: 'stop-runtime',
-          label: 'Stop Runtime',
-          hint: 'Stop local inference',
-          run: () => onStopRuntime(),
-        },
-      );
-    }
+    actions.unshift(
+      {
+        id: 'import-model',
+        label: 'Add AI Model File',
+        hint: 'Load a .gguf model from disk',
+        run: () => onImportModel(),
+      },
+      {
+        id: 'start-runtime',
+        label: 'Resume AI',
+        hint: 'Start the local AI',
+        run: () => onStartRuntime(),
+      },
+      {
+        id: 'stop-runtime',
+        label: 'Pause AI',
+        hint: 'Stop the local AI and free memory',
+        run: () => onStopRuntime(),
+      },
+    );
 
     if (activeChat) {
       actions.push({
@@ -1270,7 +1336,7 @@ export default function App() {
         run: () => onStartEditUserMessage(latestUserMessage),
       });
     }
-    return actions;
+    return [...actions, ...extensionCommands];
   })();
 
   const {
@@ -1668,10 +1734,19 @@ export default function App() {
     }));
   }
 
+  async function sendWithResponderChoice(): Promise<void> {
+    const chosen = activeChatId ? responderChoiceByChat[activeChatId] ?? [] : [];
+    if (activeChatId && chosen.length > 0) {
+      // The choice applies to one message; the next one goes back to automatic.
+      setResponderChoiceByChat((prev) => ({ ...prev, [activeChatId]: [] }));
+    }
+    await onSendMessage(undefined, chosen.length > 0 ? { responderIds: chosen } : undefined);
+  }
+
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      void onSendMessage();
+      void sendWithResponderChoice();
     }
   }
 
@@ -1798,11 +1873,6 @@ export default function App() {
       return;
     }
     await copyTextToClipboard(runtime.logFile, "Runtime log path copied.");
-  }
-
-  function onOpenModelSetup(): void {
-    setFirstRunSetupActive(true);
-    setFirstRunSetupDismissed(false);
   }
 
   function onReturnToHub(): void {
@@ -1979,6 +2049,74 @@ export default function App() {
       setNotice({ kind: "error", message: normalizeError(error) });
     } finally {
       setDeletingChatId(null);
+    }
+  }
+
+  async function onSaveEditedMessageClick(message: ChatMessage): Promise<void> {
+    const index = currentMessages.findIndex((item) => item.id === message.id);
+    const laterMessages = index >= 0 ? currentMessages.length - 1 - index : 0;
+    if (
+      message.role === "user" &&
+      laterMessages > 0 &&
+      !window.confirm(
+        `Saving this change removes the ${laterMessages} message${laterMessages === 1 ? "" : "s"} after it, because they replied to the old text. Continue?`,
+      )
+    ) {
+      return;
+    }
+    await onSaveEditedUserMessage(message);
+  }
+
+  async function onDeleteMessageClick(message: ChatMessage): Promise<void> {
+    if (!activeChat || !activeChatId || messageActionBusyId) {
+      return;
+    }
+    if (!window.confirm("Delete this message? The messages around it stay as they are.")) {
+      return;
+    }
+    setMessageActionBusyId(message.id);
+    try {
+      cancelChatWork(activeChatId);
+      const mutation = await deleteMessageApi(message.id, activeChat.historyEpoch);
+      setMessagesByChat((prev) => ({ ...prev, [activeChatId]: mutation.messages }));
+      setChats((prev) =>
+        sortChatsByRecent(
+          prev.map((chat) =>
+            chat.id === activeChatId
+              ? { ...chat, historyEpoch: mutation.historyEpoch, updatedAt: mutation.updatedAt }
+              : chat,
+          ),
+        ),
+      );
+      void getChatMemory(activeChatId)
+        .then((memory) => setMemoryByChat((prev) => ({ ...prev, [activeChatId]: memory })))
+        .catch(() => undefined);
+    } catch (error) {
+      setNotice({ kind: "error", message: normalizeError(error) });
+    } finally {
+      setMessageActionBusyId(null);
+    }
+  }
+
+  function onStartRenameChat(chat: ChatSummary): void {
+    setOpenChatMenuId(null);
+    setRenameDraft(chat.title);
+    setRenamingChatId(chat.id);
+  }
+
+  async function onSaveChatRename(chat: ChatSummary): Promise<void> {
+    const title = renameDraft.trim();
+    setRenamingChatId(null);
+    if (!title || title === chat.title) {
+      return;
+    }
+    try {
+      const renamed = await renameChat(chat.id, title);
+      setChats((previous) =>
+        previous.map((item) => (item.id === chat.id ? { ...item, title: renamed.title } : item)),
+      );
+    } catch (error) {
+      setNotice({ kind: "error", message: normalizeError(error) });
     }
   }
 
@@ -2348,6 +2486,35 @@ export default function App() {
                  const chatPreview = chatMessages[chatMessages.length - 1];
                  return (
                   <div key={chat.id} className={`panel-row-wrap${openChatMenuId === chat.id ? " menu-open" : ""}`}>
+                    {renamingChatId === chat.id ? (
+                      <div className={`panel-row chat-row${chat.id === activeChatId ? " active" : ""}`}>
+                        <CharacterAvatar character={leadCharacter} theme={leadTheme} className="chat-row-avatar" />
+                        <input
+                          className="search-input chat-rename-input"
+                          aria-label="Chat name"
+                          value={renameDraft}
+                          maxLength={120}
+                          ref={(node) => {
+                            if (node && document.activeElement !== node) {
+                              node.focus();
+                              node.select();
+                            }
+                          }}
+                          onChange={(event) => setRenameDraft(event.target.value)}
+                          onBlur={() => void onSaveChatRename(chat)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              event.currentTarget.blur();
+                            } else if (event.key === "Escape") {
+                              event.preventDefault();
+                              setRenameDraft(chat.title);
+                              event.currentTarget.blur();
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : (
                     <button
                       type="button"
                       className={`panel-row chat-row${chat.id === activeChatId ? " active" : ""}`}
@@ -2373,6 +2540,7 @@ export default function App() {
                          </small>
                        </div>
                     </button>
+                    )}
                     <div className="panel-row-actions">
                       <button
                         type="button"
@@ -2395,6 +2563,13 @@ export default function App() {
                             onClick={() => onOpenChatWorkspace(chat)}
                           >
                             <IconLabel icon="new-chat">Open Chat</IconLabel>
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost row-menu-item"
+                            onClick={() => onStartRenameChat(chat)}
+                          >
+                            Rename
                           </button>
                           <button
                             type="button"
@@ -2455,6 +2630,14 @@ export default function App() {
           className={shellMode === "hub" ? "hub-column" : shellMode === "character" ? "character-page-column" : "chat-column"}
           onScroll={shellMode === "hub" ? onWorkspaceScroll : undefined}
         >
+        <div className="app-banners">
+          <UpdateBanner />
+          <SetupBanner
+            setup={resourceSetup}
+            onStart={() => void resourceSetup.start()}
+            onCancel={resourceSetup.cancel}
+          />
+        </div>
         {shellMode === "hub" ? (
           <>
             <div className="chat-notice-slot">
@@ -2480,8 +2663,8 @@ export default function App() {
                 <GleeIcon name="search" size={17} className="search-field-icon" />
                 <input
                   className="search-input"
-                  placeholder="Search archetypes, characters, or chats..."
-                  aria-label="Search characters and chats"
+                  placeholder="Search characters..."
+                  aria-label="Search characters"
                   value={hubSearchInput}
                   onChange={(event) => setHubSearchInput(event.target.value)}
                 />
@@ -2489,6 +2672,9 @@ export default function App() {
               <div className="hub-hero-actions">
                 <button className="primary" type="button" onClick={() => startCreateCharacter()}>
                   <IconLabel icon="create-character">Create Character</IconLabel>
+                </button>
+                <button className="ghost" type="button" onClick={() => openGroupBuilder()}>
+                  <IconLabel icon="group-chat">Create Group Chat</IconLabel>
                 </button>
                 <button className="ghost" type="button" onClick={() => openProfileEditor()}>
                   <IconLabel icon="profile">Edit Profile</IconLabel>
@@ -2711,7 +2897,7 @@ export default function App() {
                 </div>
               )}
 
-              {currentMessages.map((message) => {
+              {currentMessages.map((message, index) => {
                 const isUser = message.role === "user";
                 const isFailureEvent =
                   !isUser && isGenerationFailureContent(message.content);
@@ -2731,7 +2917,8 @@ export default function App() {
                 }
                 const speaker = message.speakerCharacterId ? charMap.get(message.speakerCharacterId) : (activeParticipants[0] ?? activeCharacter);
                 const theme = themeForCharacter(speaker?.id ?? "assistant");
-                const isEditing = editingMessageId === message.id && isUser;
+                const isLastMessage = index === currentMessages.length - 1;
+                const isEditing = editingMessageId === message.id;
                 const targetedStreaming =
                   !isUser && streaming?.targetMessageId === message.id ? streaming : null;
                 return (
@@ -2755,7 +2942,7 @@ export default function App() {
                               type="button"
                               className="ghost"
                               disabled={isBusy}
-                              onClick={() => void onSaveEditedUserMessage(message)}
+                              onClick={() => void onSaveEditedMessageClick(message)}
                             >
                               {isBusy ? "Saving..." : "Save"}
                             </button>
@@ -2789,24 +2976,25 @@ export default function App() {
                       )}
                       {!isEditing && (
                         <div className="bubble-tools">
-                          {isUser ? (
-                            <button
-                              type="button"
-                              className="ghost"
-                              disabled={isBusy || sending}
-                              onClick={() => onStartEditUserMessage(message)}
-                            >
-                              <IconLabel icon="edit" size={13}>Edit</IconLabel>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              className="ghost"
-                              disabled={isBusy || sending}
-                              onClick={() => void onRegenerateAssistantMessage(message)}
-                            >
-                              <IconLabel icon="regenerate" size={13}>{isBusy ? "Regenerating..." : "Regenerate"}</IconLabel>
-                            </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            disabled={isBusy || sending || generating}
+                            onClick={() => onStartEditUserMessage(message)}
+                          >
+                            <IconLabel icon="edit" size={13}>Edit</IconLabel>
+                          </button>
+                          {!isUser && (
+                            isLastMessage && (
+                              <button
+                                type="button"
+                                className="ghost"
+                                disabled={isBusy || sending}
+                                onClick={() => void onRegenerateAssistantMessage(message)}
+                              >
+                                <IconLabel icon="regenerate" size={13}>{isBusy ? "Regenerating..." : "Regenerate"}</IconLabel>
+                              </button>
+                            )
                           )}
                           <button
                             type="button"
@@ -2819,11 +3007,40 @@ export default function App() {
                           <button
                             type="button"
                             className="ghost"
-                            disabled={sending}
-                            onClick={() => void onExportChat()}
+                            disabled={isBusy || sending || generating}
+                            onClick={() => void onDeleteMessageClick(message)}
                           >
-                            <IconLabel icon="export" size={13}>Export</IconLabel>
+                            <IconLabel icon="delete" size={13}>Delete</IconLabel>
                           </button>
+                          {activeChat && (
+                            <MessageExtensionActions
+                              message={{
+                                id: message.id,
+                                chatId: message.chatId,
+                                role: message.role,
+                                content: message.content,
+                                speakerCharacterId: message.speakerCharacterId,
+                                createdAt: message.createdAt,
+                              }}
+                              chat={{
+                                id: activeChat.id,
+                                title: activeChat.title,
+                                mode: groupChatActive ? "group" : "single",
+                                characterId: activeChat.characterId ?? undefined,
+                                participantIds,
+                              }}
+                            />
+                          )}
+                          {isLastMessage && (
+                            <button
+                              type="button"
+                              className="ghost"
+                              disabled={sending}
+                              onClick={() => void onExportChat()}
+                            >
+                              <IconLabel icon="export" size={13}>Export chat</IconLabel>
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2862,7 +3079,39 @@ export default function App() {
               <div ref={endRef} />
             </section>
 
-            <form className="composer-box" onSubmit={(event) => void onSendMessage(event)}>
+            <form
+              className="composer-box"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void sendWithResponderChoice();
+              }}
+            >
+              <ComposerExtensionTools />
+              {groupChatActive && activeChatId && (
+                <GroupReplyControls
+                  participants={activeParticipants.map((character) => ({
+                    id: character.id,
+                    name: character.name,
+                  }))}
+                  selectedIds={responderChoiceByChat[activeChatId] ?? []}
+                  disabled={sending || generating || runtime.status !== "running"}
+                  onChangeSelected={(ids) =>
+                    setResponderChoiceByChat((prev) => ({ ...prev, [activeChatId]: ids }))
+                  }
+                  onRequestReply={(characterId) => void onRequestCharacterReply(characterId)}
+                />
+              )}
+              <PersonaPicker
+                personas={personas}
+                selectedId={activeChatId ? presetProfileByChat[activeChatId]?.personaPresetId : undefined}
+                defaultName={userProfile?.name ?? ""}
+                disabled={!activeChat || sending || generating}
+                onSelect={(personaId) => {
+                  if (activeChatId) {
+                    void choosePersonaForChat(activeChatId, personaId);
+                  }
+                }}
+              />
               <div className="composer-row">
                 <textarea
                   ref={composerRef}
@@ -2910,79 +3159,39 @@ export default function App() {
         <section className="hub-side-shell">
           <section className="hub-side-panel hub-system-panel">
             <span className="detail-kicker">Workspace</span>
-            {POWER_CONTROLS_ENABLED ? (
-              <>
-                <h3>Model status</h3>
-                <div className="hub-stat-grid">
-                  <article>
-                    <HubRuntimeStatus runtime={runtime} startingRuntime={startingRuntime} />
-                    <span>Runtime</span>
-                  </article>
-                  <article>
-                    <strong>{activeModel?.name ?? "No model"}</strong>
-                    <span>Active model</span>
-                  </article>
-                </div>
-                <div className="hub-side-actions">
-                  {runtime.status === "running" ? (
-                    <button className="ghost" type="button" disabled={stoppingRuntime} onClick={() => void onStopRuntime()}>
-                      {stoppingRuntime ? "Stopping..." : "Stop Runtime"}
-                    </button>
-                  ) : (
-                    <button
-                      className="primary"
-                      type="button"
-                      disabled={startingRuntime || models.length === 0}
-                      onClick={() => void onStartRuntime()}
-                    >
-                      {startingRuntime ? "Starting AI Model..." : "Start AI Model"}
-                    </button>
-                  )}
-                  {models.length === 0 && (
-                    <button className="ghost" type="button" onClick={onOpenModelSetup}>
-                      Add GGUF Model
-                    </button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <h3>Private AI</h3>
-                <div className="hub-stat-grid">
-                  <article>
-                    <strong>
-                      {runtime.status === "running"
-                        ? "Ready"
-                        : runtime.status === "starting"
-                          ? "Preparing"
-                          : runtime.status === "error"
-                            ? "Needs attention"
-                            : "Not running"}
-                    </strong>
-                    <span>Replies</span>
-                  </article>
-                  <article>
-                    <strong>On this device</strong>
-                    <span>Chat storage</span>
-                  </article>
-                </div>
-                <div className="hub-side-actions">
-                  {runtime.status !== "running" && (
-                    <button
-                      className="primary"
-                      type="button"
-                      disabled={startingRuntime || !activeModel}
-                      onClick={() => void onStartRuntime()}
-                    >
-                      {startingRuntime ? "Preparing..." : "Prepare Private AI"}
-                    </button>
-                  )}
-                  <button className="ghost" type="button" onClick={onOpenDiagnosticsWorkspace}>
-                    Diagnostics &amp; Recovery
-                  </button>
-                </div>
-              </>
-            )}
+            <h3>Private AI</h3>
+            <div className="hub-stat-grid">
+              <article>
+                <HubRuntimeStatus runtime={runtime} startingRuntime={startingRuntime} />
+                <span>Replies</span>
+              </article>
+              <article>
+                <strong>{activeModel?.name ?? "No model"}</strong>
+                <span>AI model</span>
+              </article>
+            </div>
+            <div className="hub-side-actions">
+              {runtime.status === "running" ? (
+                <button className="ghost" type="button" disabled={stoppingRuntime} onClick={() => void onStopRuntime()}>
+                  {stoppingRuntime ? "Pausing..." : "Pause AI"}
+                </button>
+              ) : (
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={startingRuntime || !activeModel}
+                  onClick={() => void onStartRuntime()}
+                >
+                  {startingRuntime ? "Starting..." : runtime.status === "error" ? "Try Again" : "Start AI"}
+                </button>
+              )}
+              <button className="ghost" type="button" onClick={() => setSettingsOpen(true)}>
+                AI &amp; Models
+              </button>
+              <button className="ghost" type="button" onClick={onOpenDiagnosticsWorkspace}>
+                Diagnostics &amp; Recovery
+              </button>
+            </div>
           </section>
 
         </section>
@@ -3649,6 +3858,9 @@ export default function App() {
               <section className="detail-section">
                 <h4><IconLabel icon="memory">Memory</IconLabel></h4>
                 <p>{textOr(activeMemory?.summary, "No memory summary yet.")}</p>
+                {activeMemory?.summary && activeMemory.summaryAuto && (
+                  <small className="settings-note">Written automatically as the chat grows.</small>
+                )}
                 {activeMemory && activeMemory.facts.length > 0 && (
                   <div className="trait-wrap" style={{ marginTop: 9 }}>
                     {activeMemory.facts.map((fact) => (
@@ -3661,6 +3873,17 @@ export default function App() {
                     <IconLabel icon="memory">{savingMemory ? "Refreshing..." : "Refresh Memory"}</IconLabel>
                   </button>
                 </div>
+              </section>
+              <section className="detail-section">
+                <h4>Memories</h4>
+                <p className="settings-note">
+                  What characters remember, about you and about each other. Edit, pin, or delete anything.
+                </p>
+                <MemoryManager
+                  {...chatMemory}
+                  characters={memoryCharacters}
+                  chatId={activeChatId ?? undefined}
+                />
               </section>
 
               <section className="detail-section">
@@ -3774,7 +3997,7 @@ export default function App() {
                         className="context-entry"
                       >
                         <div className="context-entry-head">
-                          <strong>{snippet.role}</strong>
+                          <strong>{snippet.source === "memory-item" ? "memory" : snippet.role}</strong>
                           <small>score {snippet.score}</small>
                         </div>
                         <p>{snippetPreview(snippet.content)}</p>
@@ -3934,170 +4157,73 @@ export default function App() {
             <header className="settings-header onboarding-header">
               <div>
                 <p className="settings-eyebrow">Private chat</p>
-                <h3>{POWER_CONTROLS_ENABLED ? "Set up your local model" : "Glee needs a quick repair"}</h3>
+                <h3>{activeModel ? "Private AI needs attention" : "Glee needs to finish setting up"}</h3>
               </div>
               <button type="button" className="ghost" onClick={() => setFirstRunSetupDismissed(true)}>
-                {POWER_CONTROLS_ENABLED ? "Continue Later" : "Open Without Replies"}
+                Open Without Replies
               </button>
             </header>
 
             <div className="onboarding-body">
-              {POWER_CONTROLS_ENABLED ? (
-                <>
               <section className="detail-section settings-section">
-                <h4>Step 1: Add a GGUF model</h4>
-                <p className="settings-note">
-                  Glee needs a local GGUF model before it can start a runtime and reply in chats.
-                </p>
-
-                {recommendedModel && (
-                  <div className="inspector-helper-card onboarding-card">
-                    <div>
-                      <strong>{recommendedModel.name}</strong>
-                      <p>{recommendedModel.description}</p>
-                      {recommendedModel.sizeLabel && <p>Approx size: {recommendedModel.sizeLabel}</p>}
-                    </div>
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={downloadingModel || importingModel}
-                      onClick={() => void onDownloadRecommendedModel()}
-                    >
-                      {downloadingModel ? "Downloading..." : `Download ${recommendedModel.name}`}
-                    </button>
-                  </div>
-                )}
-                {modelDownloadProgress && (
-                  <div className="inspector-helper-card onboarding-card" role="status" aria-live="polite">
-                    <div>
-                      <strong>Model download</strong>
-                      <p>{modelDownloadProgressText(modelDownloadProgress)}</p>
-                    </div>
-                    {downloadingModel && (
-                      <button type="button" className="ghost" onClick={() => void onCancelModelDownload()}>
-                        Cancel Download
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                <label className="preset-field">
-                  <span>Download model by URL</span>
-                  <input
-                    className="search-input"
-                    placeholder="https://your-domain/model.gguf"
-                    value={modelUrlDraft}
-                    onChange={(event) => setModelUrlDraft(event.target.value)}
-                  />
-                </label>
-                <div className="settings-inline-row">
-                  <button
-                    className="ghost"
-                    type="button"
-                    disabled={downloadingModel || !modelUrlDraft.trim()}
-                    onClick={() => void onDownloadModelFromDraft()}
-                  >
-                    {downloadingModel ? "Downloading..." : "Download Model"}
-                  </button>
-                  <button
-                    className="ghost"
-                    type="button"
-                    disabled={importingModel}
-                    onClick={() => void onImportModel()}
-                  >
-                    {importingModel ? "Importing..." : "Import GGUF"}
-                  </button>
-                </div>
-
-                <label className="preset-field">
-                  <span>Import local model by path</span>
-                  <input
-                    className="search-input"
-                    placeholder="D:\\Models\\your-model.gguf"
-                    value={modelPathDraft}
-                    onChange={(event) => setModelPathDraft(event.target.value)}
-                  />
-                </label>
-                <button
-                  className="ghost"
-                  type="button"
-                  disabled={importingModel || !modelPathDraft.trim()}
-                  onClick={() => void onImportModelFromPath()}
-                >
-                  {importingModel ? "Importing..." : "Import Path"}
-                </button>
-              </section>
-
-              <section className="detail-section settings-section">
-                <h4>Step 2: Prepare the runtime</h4>
-                <p className="settings-note">
-                  After a model is ready, Glee prepares the local runtime automatically and chooses the safest CPU/GPU backend.
-                </p>
-                <RuntimeStartupSummaryCard runtime={runtime} />
-                {runtime.status === "error" && (
-                  <RuntimeRecoverySupportCard
-                    plan={runtimeRecoveryPlan}
-                    runtime={runtime}
-                    canRetryStart={Boolean(activeModel)}
-                    startingRuntime={startingRuntime}
-                    exportingDiagnostics={exportingDiagnostics}
-                    creatingDatabaseBackup={creatingDatabaseBackup}
-                    onRetryStart={() => void onCompleteFirstRunRuntimeStart()}
-                    onOpenDiagnostics={onOpenDiagnosticsWorkspace}
-                    onExportDiagnostics={() => void onExportDiagnostics()}
-                    onBackupDatabase={() => void onBackupDatabase()}
-                    onCopySupportSummary={() => void onCopyRuntimeSupportSummary()}
-                    onCopyRuntimeLog={() => void onCopyRuntimeLogPath()}
-                  />
-                )}
-                <ul className="meta-list">
-                  <li><span>Active model</span><strong>{activeModel?.name ?? "Not selected yet"}</strong></li>
-                  <li><span>Runtime</span><strong>{runtimeStatusText(runtime)}</strong></li>
-                </ul>
-                <div className="settings-inline-row">
-                  <button
-                    className="primary"
-                    type="button"
-                    disabled={startingRuntime || models.length === 0 || runtime.status === "running"}
-                    onClick={() => void onCompleteFirstRunRuntimeStart()}
-                  >
-                    {startingRuntime ? "Starting AI Model..." : "Start AI Model"}
-                  </button>
-                  {models.length > 0 && runtime.status === "running" && (
-                    <button type="button" className="ghost" onClick={() => setFirstRunSetupDismissed(true)}>
-                      Open Workspace
-                    </button>
-                  )}
-                </div>
-              </section>
-                </>
-              ) : (
-                <section className="detail-section settings-section">
-                  <h4>Private AI needs attention</h4>
-                  <p className="settings-note">
-                    Your characters and conversations are safe. Glee could not prepare the included private AI files automatically.
-                  </p>
-                  <RuntimeStartupSummaryCard runtime={runtime} />
-                  <div className="settings-inline-row">
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={startingRuntime || !activeModel}
-                      onClick={() => void onCompleteFirstRunRuntimeStart()}
-                    >
-                      {startingRuntime ? "Preparing..." : "Try Again"}
-                    </button>
-                    <button type="button" className="ghost" onClick={onOpenDiagnosticsWorkspace}>
-                      Diagnostics &amp; Recovery
-                    </button>
-                  </div>
-                  {!activeModel && (
+                {activeModel ? (
+                  <>
+                    <h4>The AI could not start</h4>
                     <p className="settings-note">
-                      Reinstall Glee with the complete offline installer, then open it again. No model paths or technical settings are required.
+                      Your characters and conversations are safe. Try starting the AI again, or open Diagnostics to see what went wrong.
                     </p>
-                  )}
-                </section>
-              )}
+                    <RuntimeStartupSummaryCard runtime={runtime} />
+                    <div className="settings-inline-row">
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={startingRuntime}
+                        onClick={() => void onCompleteFirstRunRuntimeStart()}
+                      >
+                        {startingRuntime ? "Starting..." : "Try Again"}
+                      </button>
+                      <button type="button" className="ghost" onClick={onOpenDiagnosticsWorkspace}>
+                        Diagnostics &amp; Recovery
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h4>Glee still needs to download its AI</h4>
+                    <p className="settings-note">
+                      Glee downloads its AI model and engine once (about 1.3 GB) and then works without an internet connection. Connect to the internet and choose Download, or pick a model file you already have.
+                    </p>
+                    {resourceSetup.running && (
+                      <div role="status" aria-live="polite">
+                        <progress max={100} value={resourceSetup.percent} aria-label="Download progress" />
+                        <p className="settings-note">{resourceSetup.detail}</p>
+                      </div>
+                    )}
+                    {resourceSetup.error && !resourceSetup.running && (
+                      <p className="settings-note">{resourceSetup.error}</p>
+                    )}
+                    <div className="settings-inline-row">
+                      {resourceSetup.running ? (
+                        <button type="button" className="ghost" onClick={resourceSetup.cancel}>
+                          Pause
+                        </button>
+                      ) : (
+                        <button type="button" className="primary" onClick={() => void resourceSetup.start()}>
+                          {resourceSetup.partialBytes > 0 ? "Resume Download" : "Download AI Files"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={importingModel}
+                        onClick={() => void onImportModel()}
+                      >
+                        {importingModel ? "Adding..." : "Use a Model File I Have"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </section>
             </div>
           </div>
         </dialog>
@@ -4121,6 +4247,7 @@ export default function App() {
             </header>
 
             <div className="settings-grid">
+              <UpdateSettingsSection />
               <section className="detail-section settings-section theme-settings-section">
                 <h4>Theme</h4>
                 <p className="settings-note">
@@ -4182,14 +4309,14 @@ export default function App() {
               <section className="detail-section settings-section">
                 <h4>My Data</h4>
                 <p className="settings-note">
-                  Create a local backup before major edits, or restore an earlier workspace if something goes wrong.
+                  Create a backup before major edits, save a copy somewhere safe, or restore an earlier workspace (including one from another computer) if something goes wrong.
                 </p>
                 <div className="settings-inline-row">
                   <button type="button" className="ghost" disabled={creatingDatabaseBackup} onClick={() => void onBackupDatabase()}>
                     {creatingDatabaseBackup ? "Backing up..." : "Back Up My Data"}
                   </button>
-                  <button type="button" className="ghost" disabled={loadingDiagnostics} onClick={() => void onRefreshDiagnostics()}>
-                    {loadingDiagnostics ? "Refreshing..." : "Refresh Backups"}
+                  <button type="button" className="ghost" onClick={() => void onAddBackupFromFile()}>
+                    Restore From a File...
                   </button>
                 </div>
                 <div className="database-backup-list" aria-label="Available database backups">
@@ -4203,18 +4330,27 @@ export default function App() {
                             <strong>{backup.reason === "manual" ? "Manual backup" : backup.reason.replace(/-/g, " ")}</strong>
                             <small>{displayDate(backup.modifiedAt)} · {formatBytes(backup.sizeBytes)}</small>
                           </span>
-                          <button
-                            type="button"
-                            className="ghost"
-                            disabled={restoringDatabase}
-                            onClick={() => {
-                              if (window.confirm("Restore this backup? Glee will first preserve your current data, then restart.")) {
-                                void onRestoreDatabase(backup.fileName);
-                              }
-                            }}
-                          >
-                            {restoringDatabase ? "Restoring..." : "Restore"}
-                          </button>
+                          <span className="settings-inline-row">
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => void onSaveBackupCopy(backup.fileName)}
+                            >
+                              Save a Copy...
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost"
+                              disabled={restoringDatabase}
+                              onClick={() => {
+                                if (window.confirm("Restore this backup? Glee will first preserve your current data, then restart.")) {
+                                  void onRestoreDatabase(backup.fileName);
+                                }
+                              }}
+                            >
+                              {restoringDatabase ? "Restoring..." : "Restore"}
+                            </button>
+                          </span>
                         </div>
                       </div>
                     ))
@@ -4236,8 +4372,84 @@ export default function App() {
                 </div>
               </section>
 
-              {POWER_CONTROLS_ENABLED && (
-                <>
+              <section className="detail-section settings-section">
+                <h4>AI model</h4>
+                <p className="settings-note">
+                  Glee&apos;s AI runs on this computer. Pause it to free memory; resume it when you want replies again.
+                </p>
+                <ul className="meta-list">
+                  <li><span>Status</span><strong>{runtimeStatusText(runtime)}</strong></li>
+                  <li><span>Running on</span><strong>{runtime.status === "running" ? `${runtimeAccelerationText(runtime)}${runtimeHardwareText(runtime) !== "Automatic" ? ` (${runtimeHardwareText(runtime)})` : ""}` : "-"}</strong></li>
+                </ul>
+                <label className="preset-field">
+                  <span>Model</span>
+                  <select
+                    className="search-input model-select"
+                    value={activeModel?.id ?? ""}
+                    onChange={(event) => void onSetActiveModel(event.target.value)}
+                  >
+                    {models.length === 0 && <option value="">No model installed</option>}
+                    {models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="preset-field">
+                  <span>Run the AI on</span>
+                  <select
+                    className="search-input"
+                    value={runtimeSettings.performanceMode}
+                    disabled={startingRuntime || stoppingRuntime}
+                    onChange={(event) => void onChangePerformanceMode(event.target.value as RuntimePerformanceMode)}
+                  >
+                    <option value="auto">Automatic (recommended)</option>
+                    <option value="cpu">Processor only</option>
+                    <option value="gpu">Graphics card</option>
+                  </select>
+                </label>
+                <div className="settings-inline-row">
+                  {runtime.status === "running" ? (
+                    <button type="button" className="ghost" disabled={stoppingRuntime} onClick={() => void onStopRuntime()}>
+                      {stoppingRuntime ? "Pausing..." : "Pause AI"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={startingRuntime || !activeModel}
+                      onClick={() => void onStartRuntime()}
+                    >
+                      {startingRuntime ? "Starting..." : "Resume AI"}
+                    </button>
+                  )}
+                  <button type="button" className="ghost" disabled={importingModel} onClick={() => void onImportModel()}>
+                    {importingModel ? "Adding..." : "Add a Model File..."}
+                  </button>
+                </div>
+                <p className="settings-note">
+                  Glee is tuned for its built-in model, Ternary Bonsai 2 4B. Other <code>.gguf</code> models can be added, but they may reply differently and some chat templates do not work in group chats.
+                </p>
+              </section>
+
+              <section className="detail-section settings-section">
+                <h4>Memories</h4>
+                <p className="settings-note">
+                  Everything Glee&apos;s characters remember, stored only on this computer.
+                </p>
+                <MemoryManager
+                  {...allMemory}
+                  characters={memoryCharacters}
+                  chatTitles={memoryChatTitles}
+                  showCharacterFilter
+                />
+              </section>
+
+              <ExtensionSettings />
+
+              <details className="settings-advanced">
+                <summary>Advanced</summary>
               <section className="detail-section settings-section">
                 <h4>Model Library</h4>
                 <p className="settings-note">
@@ -4575,8 +4787,7 @@ export default function App() {
                   </div>
                 </form>
               </section>
-                </>
-              )}
+              </details>
             </div>
           </div>
         </dialog>
@@ -4722,6 +4933,17 @@ export default function App() {
                   <li><span>Traits</span><strong>{userProfile?.traits.join(", ") || "-"}</strong></li>
                 </ul>
               </section>
+              <PersonaManager
+                personas={personas}
+                editingPersonaId={editingPersonaId}
+                draft={personaDraft}
+                saving={savingPersona}
+                onChangeDraft={(patch) => setPersonaDraft((prev) => ({ ...prev, ...patch }))}
+                onEdit={startEditPersona}
+                onCancelEdit={startCreatePersona}
+                onSave={savePersona}
+                onDelete={(persona) => removePersona(persona.id)}
+              />
             </div>
           </div>
         </dialog>

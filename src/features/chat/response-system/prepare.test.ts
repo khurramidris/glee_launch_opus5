@@ -54,18 +54,17 @@ const history: ChatMessage[] = [
 ];
 
 
-/** Everything the model is told: the stable system prompt plus this turn's notes. */
-function promptInstructions(compiled: CompiledCharacterPrompt): string {
-  const messages = toLlamaChatMessages(compiled);
-  const latest = messages[messages.length - 1]?.content ?? "";
-  const open = latest.indexOf(TURN_NOTES_OPEN);
-  const close = latest.indexOf(TURN_NOTES_CLOSE);
-  const notes = open === 0 && close > 0 ? latest.slice(TURN_NOTES_OPEN.length, close).trim() : "";
-  return [messages[0]?.content ?? "", notes].filter(Boolean).join("\n\n");
-}
-
 function systemPromptOf(compiled: CompiledCharacterPrompt): string {
   return toLlamaChatMessages(compiled)[0]?.content ?? "";
+}
+
+function turnNotesOf(compiled: CompiledCharacterPrompt): string {
+  const messages = toLlamaChatMessages(compiled);
+  const latest = messages[messages.length - 1]?.content ?? "";
+  if (!latest.startsWith(TURN_NOTES_OPEN)) {
+    return "";
+  }
+  return latest.slice(TURN_NOTES_OPEN.length, latest.indexOf(TURN_NOTES_CLOSE)).trim();
 }
 
 function withoutTurnNotes(message: LlamaChatMessage | undefined): LlamaChatMessage | undefined {
@@ -99,15 +98,12 @@ describe("prepareResponseRequest", () => {
     const rules = prepared.compiledPrompt.systemSections.find(
       (section) => section.key === "character_rules",
     );
-    const style = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "response_style",
-    );
 
     expect(identity?.content).toContain("Julian waits for Sam");
     expect(scene?.content).toContain("Sam corners Julian");
     expect(scene?.content).not.toContain("<START>");
     expect(rules?.content).toContain("Sam's emotional state");
-    expect(style?.content).toContain("Sam");
+    expect(identity?.content).toContain("intimate with Sam in private");
     expect(prepared.compiledPrompt.exampleMessages).toEqual([
       { role: "user", content: "Did you wait for me?", source: "example_dialogue" },
       { role: "assistant", content: "I always do.", source: "example_dialogue" },
@@ -143,16 +139,17 @@ describe("prepareResponseRequest", () => {
     const systemContract = prepared.compiledPrompt.systemSections.find(
       (section) => section.key === "system_contract",
     );
+    const notes = turnNotesOf(prepared.compiledPrompt);
 
     expect(prepared.context.mode).toBe("group");
     expect(prepared.context.isRegeneration).toBe(true);
     expect(prepared.groupRoundState).not.toBeNull();
-    expect(systemContract?.content).toContain("Regeneration request");
-    expect(systemContract?.content).toContain("Do not copy, reprint");
-    expect(systemContract?.content).toContain(
-      "Previous assistant reply to avoid repeating: Oh, please.",
-    );
-    expect(systemContract?.content).toContain("This is a multi-character group chat");
+    // Regeneration guidance is per-turn, so it rides in the notes and keeps the
+    // cache-stable system message unchanged.
+    expect(notes).toContain("Write a different reply to the same message");
+    expect(notes).toContain('Do not reuse the previous reply: "Oh, please.');
+    expect(systemContract?.content).not.toContain("different reply");
+    expect(systemContract?.content).toContain("one of several characters in a group chat");
   });
 
   it("honors explicit scene-state input and carries it into the derived scene", () => {
@@ -244,17 +241,9 @@ describe("prepareResponseRequest", () => {
       },
     });
 
-    const mergedSystem = promptInstructions(prepared.compiledPrompt);
-    const latestIndex = mergedSystem.indexOf("Raw latest user move:");
-    const liveSceneIndex = mergedSystem.indexOf("Current live scene:");
-    const profileIndex = mergedSystem.indexOf("Background about the user:");
-    const cardLoreIndex = mergedSystem.indexOf("A palace-bound royal");
-    const turnFrameSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "turn_frame",
-    );
-    const profileSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "user_profile",
-    );
+    const systemPrompt = systemPromptOf(prepared.compiledPrompt);
+    const notes = turnNotesOf(prepared.compiledPrompt);
+    const sectionKeys = prepared.compiledPrompt.systemSections.map((section) => section.key);
 
     expect(prepared.context.latestUserMessage).toContain(
       "Actually we are outside the airport now.",
@@ -264,29 +253,20 @@ describe("prepareResponseRequest", () => {
     expect(prepared.reactionPlan.continuityAnchors.join(" | ")).not.toContain(
       "Scenario frame:",
     );
-    expect(mergedSystem).toContain(
-      "Priority: latest user move > live scene/corrections > same-round room context > relationship > profile/memory > static character card.",
+    // Live grounding rides with the newest message; static profile and card
+    // lore stay in the cache-stable system prompt that comes first.
+    expect(notes).toMatch(/Scene now: .*airport/i);
+    expect(systemPrompt).not.toContain("Scene now");
+    expect(systemPrompt).toContain("A palace-bound royal");
+    expect(systemPrompt).toContain(
+      "About (background, mention only when relevant): Sam wears a jeweled crown",
     );
-    expect(mergedSystem).toContain(
-      "Keep its named people, objects, colors, and locations intact unless the character explicitly corrects them.",
+    // The saved chat scene replaces the card scenario instead of competing with it.
+    expect(sectionKeys).not.toContain("character_scene");
+    expect(systemPrompt).not.toContain("lying on her bed");
+    expect(prepared.runtimeRequest.messages[prepared.runtimeRequest.messages.length - 1]?.content).toMatch(
+      /^<reply notes>\n[\s\S]+<\/reply notes>\n\nThe cab is here\.$/,
     );
-    expect(mergedSystem).not.toContain("Scenario and roleplay framing:");
-    expect(mergedSystem).toMatch(/Current live scene: .*airport/i);
-    expect(latestIndex).toBeGreaterThanOrEqual(0);
-    expect(liveSceneIndex).toBeGreaterThanOrEqual(0);
-    expect(profileSection?.content).toContain("Background about the user:");
-    expect(turnFrameSection?.priority ?? 999).toBeLessThan(profileSection?.priority ?? 999);
-    // Live, per-turn grounding rides with the newest message; static profile and
-    // card lore stay in the cache-stable system prompt that comes first.
-    const systemPrompt = systemPromptOf(prepared.compiledPrompt);
-    expect(systemPrompt).not.toContain("Current live scene:");
-    if (profileIndex >= 0) {
-      expect(profileIndex).toBeLessThan(liveSceneIndex);
-      expect(systemPrompt).toContain("Background about the user:");
-    }
-    if (cardLoreIndex >= 0) {
-      expect(cardLoreIndex).toBeLessThan(liveSceneIndex);
-    }
     expect(prepared.responsePlan?.outputContract).toContain("speaker labels");
     expect(prepared.responsePlan?.outputContract).toContain("prompt text");
     expect(prepared.responsePlan?.outputContract).not.toContain("[dialogue]");
@@ -574,11 +554,12 @@ describe("prepareResponseRequest", () => {
     );
     expect(prepared.sceneState?.currentScene).toBe("She is lying on her bed naked.");
     expect(prepared.responsePlan?.sceneAnchor).toBe("She is lying on her bed naked.");
-    expect(
-      prepared.compiledPrompt.systemSections.find(
-        (section) => section.key === "turn_frame",
-      )?.content,
-    ).toContain("Current live scene: She is lying on her bed naked.");
+    // The scenario is already in the cache-stable system message, so the
+    // per-turn notes do not repeat it as a live scene.
+    expect(systemPromptOf(prepared.compiledPrompt)).toContain(
+      "Scenario:\nShe is lying on her bed naked.",
+    );
+    expect(turnNotesOf(prepared.compiledPrompt)).not.toContain("lying on her bed");
   });
 
   it("keeps user-profile props as background when the latest turn does not point at them", () => {
@@ -605,17 +586,16 @@ describe("prepareResponseRequest", () => {
       },
     });
 
-    const mergedSystem = promptInstructions(prepared.compiledPrompt);
     expect(prepared.sceneState?.visibleFacts.join(" | ") ?? "").not.toContain(
       "Visible user-held object",
     );
     expect(prepared.reactionPlan.continuityAnchors.join(" | ")).not.toContain(
       "User profile:",
     );
-    expect(mergedSystem).toContain("Background about the user:");
-    expect(mergedSystem).toContain(
-      "Treat saved user-profile clothing, props, weapons, vehicles, and biography as background unless the latest user move points at them.",
+    expect(systemPromptOf(prepared.compiledPrompt)).toContain(
+      "About (background, mention only when relevant): I am dressed like a medieval king.",
     );
+    expect(turnNotesOf(prepared.compiledPrompt)).not.toContain("longbow");
   });
 
   it("extracts explicit user choices and marks grounded venue scenes as companion outings", () => {
@@ -659,6 +639,9 @@ describe("prepareResponseRequest", () => {
       headTokens: ["cheese", "pizza"],
     });
     expect(prepared.sceneState?.sceneRoleExpectation).toBe("companions");
+    expect(turnNotesOf(prepared.compiledPrompt)).toContain(
+      "Sam's choice: cheese pizza. Keep it exactly; do not swap it for something else.",
+    );
     expect(prepared.reactionPlan.mustAddress.join(" | ")).toContain(
       "The user's stated preference is cheese pizza. Treat that as the current baseline.",
     );
@@ -667,7 +650,7 @@ describe("prepareResponseRequest", () => {
     );
   });
 
-  it("promotes turn frame and response contract into the compiled prompt", () => {
+  it("keeps the concrete user choice in the notes without the old analysis sections", () => {
     const prepared = prepareResponseRequest({
       speaker,
       userProfile,
@@ -701,23 +684,22 @@ describe("prepareResponseRequest", () => {
       participantNames: ["Lara", "Pooja"],
     });
 
-    const turnFrameSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "turn_frame",
-    );
-    const responseContractSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "response_contract",
-    );
+    const sectionKeys = prepared.compiledPrompt.systemSections.map((section) => section.key);
+    const notes = turnNotesOf(prepared.compiledPrompt);
 
     expect(prepared.turnFrame?.userAction).toBe("search");
     expect(prepared.turnFrame?.topic).toContain("almond milk");
     expect(prepared.turnFrame?.locationTarget).toBe("shelf");
-    expect(turnFrameSection?.content).toContain("Visible search/action cue");
-    expect(responseContractSection?.content).toContain("Must acknowledge:");
-    expect(responseContractSection?.content).toContain("almond milk");
-    expect(responseContractSection?.content).toContain("Output contract:");
+    expect(notes).toContain("Sam's choice: some almond milk.");
+    expect(notes).toContain("Scene now: We are in a supermarket.");
+    expect(sectionKeys).not.toContain("turn_frame");
+    expect(sectionKeys).not.toContain("response_contract");
+    expect(sectionKeys).not.toContain("reaction_plan");
+    expect(sectionKeys).not.toContain("turn_interpretation");
+    expect(notes).not.toContain("Response obligation");
   });
 
-  it("keeps live user and scene grounding inside the merged group system prompt even for huge cards", () => {
+  it("keeps live user and scene grounding in the reply notes even for huge cards", () => {
     const prepared = prepareResponseRequest({
       speaker: {
         ...speaker,
@@ -760,20 +742,15 @@ describe("prepareResponseRequest", () => {
       participantNames: ["Julian", "Lara", "Yara", "Priyanka"],
     });
 
-    const mergedSystem = promptInstructions(prepared.compiledPrompt);
+    const systemPrompt = systemPromptOf(prepared.compiledPrompt);
+    const notes = turnNotesOf(prepared.compiledPrompt);
 
-    expect(mergedSystem).toContain("It is this character's turn right now.");
-    expect(mergedSystem).toContain("About the user: Sam has a Golden Skull in his hands.");
-    expect(mergedSystem).toContain(
-      "If the latest move points at the user's current state or possessions",
-    );
-    expect(mergedSystem).toContain(
-      "Current live scene: We are sitting in the dining room eating pizza.",
-    );
-    expect(mergedSystem).toMatch(/Visible user-held object: .*golden skull/i);
-    expect(mergedSystem).toContain("Latest user move:");
-    expect(mergedSystem).toContain("Raw latest user move: Look what I have in my hand.");
-    expect(mergedSystem).not.toContain("Scenario and roleplay framing:");
+    expect(systemPrompt).toContain("one of several characters in a group chat");
+    expect(systemPrompt.length).toBeLessThanOrEqual(3200);
+    expect(notes).toContain("Scene now: We are sitting in the dining room eating pizza.");
+    expect(notes).toMatch(/Sam is holding golden skull/i);
+    expect(notes.length).toBeLessThanOrEqual(700);
+    expect(systemPrompt).not.toContain("Scene now");
     expect(prepared.compiledPrompt.exampleMessages).toEqual([]);
     expect(prepared.runtimeRequest.max_tokens).toBe(512);
   });
@@ -820,18 +797,24 @@ describe("prepareResponseRequest", () => {
       },
     });
 
-    const mergedSystem = promptInstructions(prepared.compiledPrompt);
+    const userMessages = prepared.runtimeRequest.messages
+      .filter((message) => message.role === "user")
+      .slice(-2);
 
     expect(prepared.context.latestUserMessage).toContain("no need for forgiveness");
     expect(prepared.context.latestUserMessage).toContain("???");
     expect(prepared.turnInterpretation?.actionType).toBe("question");
     expect(prepared.turnFrame?.stopInstruction).toBeNull();
     expect(prepared.responsePlan?.mustAvoid.join(" ")).not.toContain("forgiveness");
-    expect(mergedSystem).toContain("Raw latest user move: no need for forgiveness");
-    expect(mergedSystem).toContain("???");
+    // Both user messages stay in the chat; the notes ride on the last one.
+    expect(userMessages[0]?.content).toBe(
+      "no need for forgiveness, i like what i see I say with a hint of flirt",
+    );
+    expect(userMessages[1]?.content).toMatch(/<\/reply notes>\n\n\?\?\?$/);
+    expect(turnNotesOf(prepared.compiledPrompt)).toContain("John is asking you a question");
   });
 
-  it("compresses heavy imported lore without lowering the single-chat token budget", () => {
+  it("caps heavy imported lore while keeping the single-chat output budget", () => {
     const prepared = prepareResponseRequest({
       speaker: {
         ...speaker,
@@ -873,14 +856,16 @@ describe("prepareResponseRequest", () => {
     const scene = prepared.compiledPrompt.systemSections.find(
       (section) => section.key === "character_scene",
     );
-    const mergedSystem = promptInstructions(prepared.compiledPrompt);
 
     expect(prepared.runtimeRequest.max_tokens).toBe(512);
-    expect(identity?.content.length ?? 0).toBeLessThan(1300);
-    expect(scene?.content.length ?? 0).toBeLessThan(320);
-    expect(mergedSystem).toContain("Raw latest user move: hi");
-    expect(systemPromptOf(prepared.compiledPrompt).length).toBeLessThan(4300);
+    expect(identity?.content.length ?? 0).toBeLessThan(1450);
+    expect(scene?.content.length ?? 0).toBeLessThan(420);
+    expect(systemPromptOf(prepared.compiledPrompt).length).toBeLessThan(3300);
     expect(prepared.compiledPrompt.exampleMessages).toHaveLength(8);
+    // A bare greeting has no turn analysis worth sending.
+    expect(turnNotesOf(prepared.compiledPrompt)).toBe(
+      "John Smith is greeting you; greet back briefly in your own voice.",
+    );
   });
 
   it("preserves prior group speaker identities in runtime history", () => {
@@ -935,10 +920,6 @@ describe("prepareResponseRequest", () => {
     });
 
     const runtimeMessages = toLlamaChatMessages(prepared.compiledPrompt);
-    const groupStateSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "group_round_state",
-    );
-
     expect(runtimeMessages).toContainEqual({
       role: "user",
       content: "[Group speaker: Lara]\nWe're listening.",
@@ -947,8 +928,8 @@ describe("prepareResponseRequest", () => {
       role: "user",
       content: "[Group speaker: Yara]\nThen stop stalling and say it.",
     });
-    expect(promptInstructions(prepared.compiledPrompt)).toContain(
-      "Treat another speaker's lines as room context, not as your own words.",
+    expect(systemPromptOf(prepared.compiledPrompt)).toContain(
+      "Messages marked [Group speaker: Name] are what that character said earlier, not your words.",
     );
     expect(JSON.stringify(runtimeMessages)).not.toContain("Previous group reply");
     expect(withoutTurnNotes(runtimeMessages[runtimeMessages.length - 1])).toEqual({
@@ -962,10 +943,10 @@ describe("prepareResponseRequest", () => {
     expect(prepared.context.groupRoundState?.currentSocialBeat).toMatch(
       /No prior same-round reply/i,
     );
-    expect(groupStateSection?.content).toContain("Current speaker obligations:");
+    expect(turnNotesOf(prepared.compiledPrompt)).toBe("Sam is talking to you.");
   });
 
-  it("uses a concise identity-and-memory prompt for the shipped 0.5B model", () => {
+  it("sends memory facts in the turn notes and keeps the system message free of them", () => {
     const prepared = prepareResponseRequest({
       speaker,
       userProfile,
@@ -976,6 +957,24 @@ describe("prepareResponseRequest", () => {
         facts: ["My favorite tea is jasmine"],
         updatedAt: "2000-01-01T00:00:00.000Z",
       },
+      semanticMemorySnippets: [
+        {
+          chatId: "chat-1",
+          messageId: "old-user-tea",
+          role: "user",
+          content: "My favorite tea is jasmine.",
+          createdAt: "2000-01-01T00:00:00.000Z",
+          score: 99,
+        },
+        {
+          chatId: "chat-1",
+          messageId: "old-user-dog",
+          role: "user",
+          content: "My dog is called Biscuit.",
+          createdAt: "2000-01-01T00:00:00.000Z",
+          score: 80,
+        },
+      ],
       history: [
         {
           id: "u1",
@@ -987,23 +986,71 @@ describe("prepareResponseRequest", () => {
       ],
       sampling: {},
       runtime: {
-        model: "qwen2.5-0.5b-instruct-q4_k_m",
+        model: "ternary-bonsai-2-4b-pq2_0",
         stream: true,
       },
     });
 
-    const sectionKeys = prepared.compiledPrompt.systemSections.map(
-      (section) => section.key,
-    );
-    const mergedSystem = promptInstructions(prepared.compiledPrompt);
+    const notes = turnNotesOf(prepared.compiledPrompt);
 
-    expect(sectionKeys).toContain("character_identity");
-    expect(sectionKeys).toContain("memory_summary");
-    expect(sectionKeys).not.toContain("reaction_plan");
-    expect(sectionKeys).not.toContain("response_contract");
-    expect(mergedSystem).toContain("jasmine");
-    expect(mergedSystem).toContain("not a description of the desired voice");
-    expect(systemPromptOf(prepared.compiledPrompt).length).toBeLessThanOrEqual(3600);
+    expect(notes).toContain("Facts about Sam (I/my means Sam, not you): My favorite tea is jasmine");
+    expect(notes).toContain("Recalled: [user: Sam] My dog is called Biscuit.");
+    // A recalled snippet that repeats a stored fact is only shown once.
+    expect(notes.match(/jasmine/g)?.length).toBe(2);
+    expect(notes).not.toContain("Recalled: [user: Sam] My favorite tea");
+    expect(systemPromptOf(prepared.compiledPrompt)).not.toContain("jasmine");
+    expect(notes.length).toBeLessThanOrEqual(700);
+  });
+
+  it("shows remembered items instead of regex facts and keeps the chat summary", () => {
+    const prepared = prepareResponseRequest({
+      speaker,
+      userProfile,
+      contextEntries: [],
+      memory: {
+        chatId: "chat-1",
+        summary: "Sam and Julian talked about the harbor.",
+        facts: ["My favorite tea is jasmine"],
+        updatedAt: "2000-01-01T00:00:00.000Z",
+      },
+      semanticMemorySnippets: [
+        {
+          chatId: "chat-1",
+          messageId: "memory-item:a",
+          source: "memory-item",
+          role: "system",
+          content: "Sam's favorite tea is jasmine",
+          createdAt: "2000-01-01T00:00:00.000Z",
+          score: 90,
+        },
+        {
+          chatId: "chat-1",
+          messageId: "old-user-tea",
+          role: "user",
+          content: "My favorite tea is jasmine.",
+          createdAt: "2000-01-01T00:00:00.000Z",
+          score: 80,
+        },
+      ],
+      history: [
+        {
+          id: "u1",
+          chatId: "chat-1",
+          role: "user",
+          content: "What tea would you bring me?",
+          createdAt: "2000-01-01T00:00:00.000Z",
+        },
+      ],
+      sampling: {},
+      runtime: { model: "ternary-bonsai-2-4b-pq2_0", stream: true },
+    });
+
+    const notes = turnNotesOf(prepared.compiledPrompt);
+    expect(notes).toContain("Remembered: Sam's favorite tea is jasmine");
+    expect(notes).not.toContain("Facts about Sam");
+    expect(notes).toContain("Earlier: Sam and Julian talked about the harbor.");
+    // Facts are no longer shown, so they no longer hide the recalled message.
+    expect(notes).toContain("Recalled: [user: Sam] My favorite tea is jasmine.");
   });
 
   it("keeps same-round group replies as structured room context instead of runtime assistant history", () => {
@@ -1051,9 +1098,7 @@ describe("prepareResponseRequest", () => {
     });
 
     const runtimeMessages = toLlamaChatMessages(prepared.compiledPrompt);
-    const groupStateSection = prepared.compiledPrompt.systemSections.find(
-      (section) => section.key === "group_round_state",
-    );
+    const notes = turnNotesOf(prepared.compiledPrompt);
 
     expect(withoutTurnNotes(runtimeMessages[runtimeMessages.length - 1])).toEqual({
       role: "user",
@@ -1090,15 +1135,10 @@ describe("prepareResponseRequest", () => {
     expect(prepared.context.groupRoundState?.engagementCueTokens).toEqual(
       expect.arrayContaining(["listening", "stalling"]),
     );
-    expect(groupStateSection?.content).toContain("Earlier replies this round:");
-    expect(groupStateSection?.content).toContain(
-      "Use these as room context already heard by the current speaker",
-    );
-    expect(groupStateSection?.content).toContain(
-      "Lara: adds a personal angle to the exchange; tone=steady; gist=We're listening.",
-    );
-    expect(groupStateSection?.content).toContain("Current social beat:");
-    expect(groupStateSection?.content).toContain("Expected social move:");
+    expect(notes).toContain("Sam is talking to the whole group.");
+    expect(notes).toContain("Lara already said: We're listening.");
+    expect(notes).toContain("Yara already said: Then stop stalling and say it.");
+    expect(notes).toContain("Do not repeat them; add your own angle.");
   });
 
   it("routes provocative direct-address group turns as live social beats", () => {
@@ -1176,7 +1216,8 @@ describe("prepareResponseRequest", () => {
     expect(poojaPrepared.responsePlan?.groupObligation).toMatch(/addressee.*provocative/i);
     expect(poojaPrepared.reactionPlan.primaryGoal).toMatch(/addressee.*provocative/i);
     expect(poojaPrepared.reactionPlan.forbiddenMoves.join(" ")).toMatch(/stale practical topic/i);
-    expect(poojaGroupSection?.content).toContain("Latest user social tone: provocative");
+    expect(poojaGroupSection?.content).toContain("Sam's tone is provocative");
+    expect(poojaGroupSection?.content).toContain("Sam is talking to you.");
 
     expect(yulianPrepared.groupRoundState?.addressedParticipants).toEqual(["Pooja"]);
     expect(yulianPrepared.groupRoundState?.latestUserSocialTone).toBe("provocative");
@@ -1185,6 +1226,148 @@ describe("prepareResponseRequest", () => {
     expect(yulianPrepared.responsePlan?.groupObligation).toMatch(/observing.*Pooja/i);
     expect(yulianPrepared.reactionPlan.primaryGoal).toMatch(/observing participant.*Pooja/i);
     expect(yulianPrepared.reactionPlan.forbiddenMoves.join(" ")).toMatch(/addressed to you/i);
-    expect(yulianGroupSection?.content).toContain("Latest user social tone: provocative");
+    expect(yulianGroupSection?.content).toContain("Sam's tone is provocative");
+    expect(yulianGroupSection?.content).toContain("Sam is talking to Pooja, not to you.");
+  });
+
+  it("keeps the system message byte-identical while the latest move and live scene change", () => {
+    const prepareFor = (content: string) =>
+      prepareResponseRequest({
+        speaker,
+        userProfile: { ...userProfile, about: "Sam is driving a black Mercedes coupe." },
+        contextEntries: [],
+        history: [
+          {
+            id: "m-turn",
+            chatId: "chat-1",
+            role: "user",
+            content,
+            createdAt: "2000-01-01T00:00:00.000Z",
+          },
+        ],
+        sampling: {},
+        runtime: { model: "test-model", stream: true },
+      });
+
+    const greeting = prepareFor("hi");
+    const scene = prepareFor("Actually we are outside the airport now. Look what I am driving.");
+    const armed = prepareFor("Put your hands up. I have an AK47 on you.");
+
+    expect(systemPromptOf(scene.compiledPrompt)).toBe(systemPromptOf(greeting.compiledPrompt));
+    expect(systemPromptOf(armed.compiledPrompt)).toBe(systemPromptOf(greeting.compiledPrompt));
+    expect(turnNotesOf(scene.compiledPrompt)).toMatch(/Scene now: .*airport/i);
+    expect(turnNotesOf(armed.compiledPrompt)).toContain("Sam is threatening you");
+  });
+
+  it("keeps a spoken choice such as 'I'll take the red one' in the notes", () => {
+    const prepared = prepareResponseRequest({
+      speaker,
+      userProfile,
+      contextEntries: [],
+      history: [
+        {
+          id: "m-red",
+          chatId: "chat-1",
+          role: "user",
+          content: "I'll take the red one.",
+          createdAt: "2000-01-01T00:00:00.000Z",
+        },
+      ],
+      sampling: {},
+      runtime: { model: "test-model", stream: true },
+    });
+
+    expect(prepared.context.explicitUserChoice).toMatchObject({
+      kind: "preference",
+      surfaceText: "the red one",
+    });
+    expect(turnNotesOf(prepared.compiledPrompt)).toContain(
+      "Sam's choice: the red one. Keep it exactly; do not swap it for something else.",
+    );
+  });
+
+  it("does not turn a wish to talk into a preserved choice", () => {
+    const prepared = prepareResponseRequest({
+      speaker,
+      userProfile,
+      contextEntries: [],
+      history: [
+        {
+          id: "m-wish",
+          chatId: "chat-1",
+          role: "user",
+          content: "I want to know what happened at the harbor",
+          createdAt: "2000-01-01T00:00:00.000Z",
+        },
+      ],
+      sampling: {},
+      runtime: { model: "test-model", stream: true },
+    });
+
+    expect(turnNotesOf(prepared.compiledPrompt)).not.toContain("choice");
+  });
+
+  it("caps the reply notes and cuts long saved text at sentence boundaries", () => {
+    const prepared = prepareResponseRequest({
+      speaker,
+      userProfile,
+      relationshipState: {
+        chatId: "chat-1",
+        summary: "They have known each other for years and argue about everything. ".repeat(8),
+        currentScene: "We are waiting beside an airport taxi stand under a flickering sign. ".repeat(6),
+        interactionTone: "Busy, loud, and affectionate despite the constant bickering.",
+        characterState: "Tired but amused after a long flight.",
+        userState: "Carrying far too many bags and pretending not to be flustered.",
+        userRoleName: "",
+        userRoleDescription: "",
+        updatedAt: "2000-01-01T00:00:00.000Z",
+      },
+      memory: {
+        chatId: "chat-1",
+        summary: "Sam told Julian many things about travel plans. ".repeat(10),
+        facts: Array.from({ length: 12 }, (_, index) => `Fact number ${index} about Sam's trip`),
+        updatedAt: "2000-01-01T00:00:00.000Z",
+      },
+      contextEntries: [],
+      history: [
+        {
+          id: "m-long",
+          chatId: "chat-1",
+          role: "user",
+          content: "Can you tell me where we are going next?",
+          createdAt: "2000-01-01T00:00:00.000Z",
+        },
+      ],
+      sampling: {},
+      runtime: { model: "test-model", stream: true },
+    });
+
+    const notes = turnNotesOf(prepared.compiledPrompt);
+
+    expect(notes.length).toBeGreaterThan(0);
+    expect(notes.length).toBeLessThanOrEqual(700);
+    // Long saved text is cut at sentence boundaries, never mid-word.
+    expect(notes).not.toContain("...");
+    expect(notes).toContain("under a flickering sign.");
+    expect(notes).toContain("Fact number 0 about Sam's trip");
+  });
+
+  it("shows freeform example dialogue in the system message when it cannot be replayed as turns", () => {
+    const prepared = prepareResponseRequest({
+      speaker: {
+        ...speaker,
+        exampleDialogue: "Julian greets visitors with a dry \"Mind the dust.\" and rarely says more.",
+      },
+      userProfile,
+      contextEntries: [],
+      history,
+      sampling: {},
+      runtime: { model: "test-model", stream: true },
+    });
+
+    expect(prepared.compiledPrompt.exampleMessages).toEqual([]);
+    expect(systemPromptOf(prepared.compiledPrompt)).toContain(
+      'Example of how Julian talks: Julian greets visitors with a dry "Mind the dust." and rarely says more.',
+    );
   });
 });

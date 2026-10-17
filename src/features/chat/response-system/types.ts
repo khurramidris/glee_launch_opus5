@@ -201,7 +201,6 @@ export interface PromptDialogueExample {
 }
 
 export interface CompiledResponseRequestInput {
-  runtimeModel?: string;
   speaker?: Character;
   userProfile?: UserProfile;
   relationshipState?: ChatRelationshipState;
@@ -216,10 +215,7 @@ export interface CompiledResponseRequestInput {
   history: ChatMessage[];
   sceneState?: DerivedSceneState | null;
   turnInterpretation?: TurnInterpretation | null;
-  turnFrame?: TurnFrame | null;
-  responsePlan?: HarnessResponsePlan | null;
-  reactionPlan?: CharacterReactionPlan | null;
-  salienceProfile?: ResponseSalienceProfile | null;
+  explicitUserChoice?: ExplicitUserChoice | null;
   groupRoundState?: GroupRoundState | null;
 }
 
@@ -316,6 +312,7 @@ export interface PreparedResponseRequest {
   memorySelection: MemorySelection;
   compiledPrompt: CompiledCharacterPrompt;
   runtimeRequest: LlamaChatRequest;
+  buildRuntimeRequest: (turnNotes?: readonly string[]) => LlamaChatRequest;
 }
 
 export type ResponseEvaluationReason =

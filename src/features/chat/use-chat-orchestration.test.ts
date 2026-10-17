@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../../extensions-runtime", () => ({
+  extensionRegistry: {
+    beforeSend: async (draft: { chatId: string; text: string }) => ({ draft }),
+    transformPromptNotes: async (notes: string[]) => ({ notes, added: [] }),
+    afterReply: async () => undefined,
+  },
+}));
+
+vi.mock("./auto-summary", () => ({
+  maybeUpdateAutoSummary: vi.fn(),
+}));
+
 vi.mock("../../api/tauri", () => ({
   appendMessage: vi.fn(),
   branchChat: vi.fn(),
@@ -76,7 +88,7 @@ vi.mock("../../stores", () => ({
 vi.mock("../app/app-domain", () => ({
   GENERATION_CANCELLED_MESSAGE: "cancelled",
   buildExportSlug: vi.fn(),
-  downloadTextFile: vi.fn(),
+  exportChatTranscript: vi.fn(),
   emptyMemory: vi.fn(),
   isGenerationCancelledError: vi.fn(() => false),
   normalizeError: vi.fn((error: unknown) => String(error)),
@@ -164,7 +176,7 @@ describe("use-chat-orchestration repair requests", () => {
     });
 
     expect(request.stream).toBe(false);
-    expect(request.max_tokens).toBe(256);
+    expect(request.max_tokens).toBe(384);
     expect(request.messages.slice(0, 2)).toEqual(preparedResponse.runtimeRequest.messages);
     expect(request.messages[2]).toEqual({
       role: "assistant",
@@ -179,6 +191,16 @@ describe("use-chat-orchestration repair requests", () => {
     expect(request.messages[3]?.content).toContain(
       "Latest user move still in force: What do you want, Pooja?",
     );
+  });
+
+  it("gives the repair request the same token budget as the original request", () => {
+    const request = __test__.buildCanonicalRepairRequestBody({
+      preparedResponse: makePreparedResponse({ maxTokens: 700 }),
+      repairInstruction: "Rewrite the reply as Pooja and answer directly.",
+      invalidDraft: "I can answer that.",
+    });
+
+    expect(request.max_tokens).toBe(700);
   });
 
   it("keeps prompt-echo drafts out of the repair history and asks for a fresh reply", () => {
@@ -340,7 +362,7 @@ describe("use-chat-orchestration repair requests", () => {
     expect(selected).toEqual(["char-pooja"]);
   });
 
-  it("selects every group participant when no one is directly addressed", () => {
+  it("selects at most two group participants when no one is directly addressed", () => {
     const selected = __test__.selectGroupResponderIds({
       responderIds: ["char-yulian", "char-pooja", "char-lara"],
       participantDirectory: {
@@ -351,7 +373,43 @@ describe("use-chat-orchestration repair requests", () => {
       latestUserMessage: "What does everyone think?",
     });
 
-    expect(selected).toEqual(["char-yulian", "char-pooja", "char-lara"]);
+    expect(selected).toEqual(["char-yulian", "char-pooja"]);
+  });
+
+  it("rotates unaddressed group turns onward from the last speaker", () => {
+    const selected = __test__.selectGroupResponderIds({
+      responderIds: ["char-yulian", "char-pooja", "char-lara"],
+      participantDirectory: {
+        "char-yulian": "Yulian",
+        "char-pooja": "Pooja",
+        "char-lara": "Lara",
+      },
+      latestUserMessage: "What does everyone think?",
+      lastSpeakerId: "char-pooja",
+    });
+
+    expect(selected).toEqual(["char-lara", "char-yulian"]);
+  });
+
+  it("finds the last speaking character in a history", () => {
+    const history = [
+      { id: "1", chatId: "c", role: "user", content: "hi", createdAt: "" },
+      { id: "2", chatId: "c", role: "assistant", content: "yo", speakerCharacterId: "a", createdAt: "" },
+      { id: "3", chatId: "c", role: "assistant", content: "hey", speakerCharacterId: "b", createdAt: "" },
+      { id: "4", chatId: "c", role: "user", content: "so?", createdAt: "" },
+    ] as any;
+
+    expect(__test__.lastAssistantSpeakerId(history)).toBe("b");
+    expect(__test__.lastAssistantSpeakerId(history.slice(0, 1))).toBeUndefined();
+  });
+
+  it("keeps explicit responders in the caller's order and drops strangers and duplicates", () => {
+    expect(
+      __test__.resolveExplicitResponderIds(["c", "a", "c", "z"], ["a", "b", "c"]),
+    ).toEqual(["c", "a"]);
+    expect(__test__.resolveExplicitResponderIds(["z"], ["a", "b"])).toEqual([]);
+    expect(__test__.resolveExplicitResponderIds([], ["a", "b"])).toBeNull();
+    expect(__test__.resolveExplicitResponderIds(undefined, ["a", "b"])).toBeNull();
   });
 
   it("selects multiple explicitly addressed participants in roster order", () => {

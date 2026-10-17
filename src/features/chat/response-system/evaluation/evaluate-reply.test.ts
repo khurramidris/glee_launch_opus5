@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateCharacterReply } from "./evaluate-reply";
+import { evaluateCharacterReply, UNSHOWABLE_REASONS } from "./evaluate-reply";
 import type { PreparedResponseRequest } from "../types";
 
 const baseSalienceProfile = {
@@ -105,6 +105,11 @@ const preparedForCommand: PreparedResponseRequest = {
     messages: [],
     stream: true,
   },
+  buildRuntimeRequest: () => ({
+    model: "test-model",
+    messages: [],
+    stream: true,
+  }),
 };
 
 const preparedForProfileCue: PreparedResponseRequest = {
@@ -862,7 +867,7 @@ describe("evaluateCharacterReply", () => {
 
     expect(result.reasons).toContain("incomplete_sentence");
     expect(result.retryRequested).toBe(true);
-    expect(result.fatal).toBe(true);
+    expect(result.fatal).toBe(false);
   });
 
   it("flags short group fragments ending in a preposition as incomplete", () => {
@@ -875,7 +880,7 @@ describe("evaluateCharacterReply", () => {
 
     expect(result.reasons).toContain("incomplete_sentence");
     expect(result.retryRequested).toBe(true);
-    expect(result.fatal).toBe(true);
+    expect(result.fatal).toBe(false);
   });
 
   it("flags replies that repeat the opening of recent assistant text", () => {
@@ -912,7 +917,7 @@ describe("evaluateCharacterReply", () => {
 
     expect(result.reasons).toContain("repeated_opening");
     expect(result.retryRequested).toBe(true);
-    expect(result.fatal).toBe(true);
+    expect(result.fatal).toBe(false);
   });
 
   it("flags direct user echo", () => {
@@ -987,7 +992,7 @@ describe("evaluateCharacterReply", () => {
     expect(result.reasons).toContain("user_choice_overwrite");
     expect(result.retryRequested).toBe(true);
     expect(result.suppressPreview).toBe(true);
-    expect(result.fatal).toBe(true);
+    expect(result.fatal).toBe(false);
   });
 
   it("flags the character's own name used as a vocative for the user", () => {
@@ -1695,7 +1700,7 @@ describe("evaluateCharacterReply", () => {
     expect(result.reasons).toContain("same_round_non_engagement");
     expect(result.retryRequested).toBe(true);
     expect(result.suppressPreview).toBe(true);
-    expect(result.fatal).toBe(true);
+    expect(result.fatal).toBe(false);
   });
 
   it("flags observers who answer like the practical request was addressed to them", () => {
@@ -1736,7 +1741,7 @@ describe("evaluateCharacterReply", () => {
     expect(result.reasons).toContain("observer_role_violation");
     expect(result.retryRequested).toBe(true);
     expect(result.suppressPreview).toBe(true);
-    expect(result.fatal).toBe(true);
+    expect(result.fatal).toBe(false);
   });
 
   it("produces a strong score for a direct in-character reply", () => {
@@ -1751,5 +1756,177 @@ describe("evaluateCharacterReply", () => {
     expect(result.suppressPreview).toBe(false);
     expect(result.qualityScore).toBe(1);
     expect(result.fatal).toBe(false);
+  });
+
+  describe("false-positive handling", () => {
+    it("does not treat a bare in-character opener as assistant drift", () => {
+      for (const reply of [
+        "Of course, I remember the way back to the harbor.",
+        "Certainly, I will meet you at the gate before sunrise.",
+        "I understand. Then we leave at dawn and say nothing.",
+        '"Of course," she says, "but you owe me a story."',
+      ]) {
+        const result = evaluateCharacterReply({ reply, speakerName: "Chris" });
+        expect(result.reasons, reply).not.toContain("generic_assistant_drift");
+      }
+    });
+
+    it("still flags service-desk assistant phrasing", () => {
+      for (const reply of [
+        "Of course! I'd be happy to help you with that.",
+        "Certainly! Here is a list of options for you.",
+        "I can help you with that request right away.",
+        "I'm here to help. What do you need?",
+        "I understand your request, and I will assist.",
+        "How can I help you today?",
+      ]) {
+        const result = evaluateCharacterReply({ reply, speakerName: "Chris" });
+        expect(result.reasons, reply).toContain("generic_assistant_drift");
+        expect(result.fatal, reply).toBe(false);
+      }
+    });
+
+    it("does not call a lone unbalanced quote or asterisk an incomplete sentence", () => {
+      for (const reply of [
+        'She smiles. "We should go back now.',
+        "*She leans on the doorway. Come in out of the cold.",
+        'He nods once and says "fine. Have it your way.',
+      ]) {
+        const result = evaluateCharacterReply({ reply, speakerName: "Chris" });
+        expect(result.reasons, reply).not.toContain("incomplete_sentence");
+        expect(result.retryRequested, reply).toBe(false);
+      }
+    });
+
+    it("accepts recognised short answers", () => {
+      for (const reply of ["Hmm.", "Sure.", "Maybe.", "Yes.", "No.", "Hmm, maybe."]) {
+        const result = evaluateCharacterReply({
+          reply,
+          speakerName: "Chris",
+          latestUserMessage: "Do you think the bridge will hold if we cross at night?",
+        });
+        expect(result.reasons, reply).not.toContain("insufficient_substance");
+      }
+    });
+
+    it("accepts a terse reply to a terse or greeting-like user turn", () => {
+      for (const latestUserMessage of ["hi", "good morning", "ready?", "you ok"]) {
+        const result = evaluateCharacterReply({
+          reply: "Always.",
+          speakerName: "Chris",
+          latestUserMessage,
+        });
+        expect(result.reasons, latestUserMessage).not.toContain("insufficient_substance");
+      }
+    });
+
+    it("still rejects an unrecognised fragment after a substantive user turn", () => {
+      const result = evaluateCharacterReply({
+        reply: "royalty",
+        speakerName: "Chris",
+        latestUserMessage: "I think I am gonna order a steak and then walk home",
+      });
+
+      expect(result.reasons).toContain("insufficient_substance");
+      expect(result.fatal).toBe(true);
+    });
+
+    it("allows short group replies to a short user turn", () => {
+      const result = evaluateCharacterReply({
+        reply: "Hmm, sure.",
+        speakerName: "Yulian",
+        latestUserMessage: "Ready?",
+        prepared: preparedForGroupRoster as PreparedResponseRequest,
+      });
+
+      expect(result.reasons).not.toContain("insufficient_substance");
+    });
+
+    it("does not call a greeting reply an echo of a short greeting", () => {
+      const result = evaluateCharacterReply({
+        reply: "Hello there! Fancy seeing you here.",
+        speakerName: "Chris",
+        latestUserMessage: "hello",
+      });
+
+      expect(result.reasons).not.toContain("user_echo");
+    });
+
+    it("flags a long user message copied into the reply", () => {
+      const result = evaluateCharacterReply({
+        reply: 'You said "I will meet you by the old bridge at noon" and that worries me.',
+        speakerName: "Chris",
+        latestUserMessage: "I will meet you by the old bridge at noon",
+      });
+
+      expect(result.reasons).toContain("user_echo");
+    });
+
+    it("flags a reply that is mostly the echoed user message", () => {
+      const result = evaluateCharacterReply({
+        reply: "Love you more.",
+        speakerName: "Chris",
+        latestUserMessage: "love you more",
+      });
+
+      expect(result.reasons).toContain("user_echo");
+    });
+  });
+
+  describe("show-as-last-resort classification", () => {
+    it("keeps recoverable reasons showable", () => {
+      for (const reason of [
+        "repeated_opening",
+        "user_echo",
+        "incomplete_sentence",
+        "generic_assistant_drift",
+        "missed_immediate_reaction",
+        "user_choice_overwrite",
+        "same_round_non_engagement",
+      ] as const) {
+        expect(UNSHOWABLE_REASONS.has(reason), reason).toBe(false);
+      }
+    });
+
+    it("never shows genuinely broken output", () => {
+      for (const reason of [
+        "empty_after_sanitize",
+        "transcript_leakage",
+        "placeholder_leak",
+        "role_inversion",
+        "other_participant_impersonation",
+        "meta_reasoning",
+        "scene_replacement_drift",
+      ] as const) {
+        expect(UNSHOWABLE_REASONS.has(reason), reason).toBe(true);
+      }
+    });
+  });
+
+  describe("truncated replies", () => {
+    it("does not judge the ending of a reply the runtime cut at its token limit", () => {
+      const reply = "I was just going to";
+      const cut = evaluateCharacterReply({ reply, speakerName: "Riley" });
+      const truncated = evaluateCharacterReply({
+        reply,
+        speakerName: "Riley",
+        truncated: true,
+      });
+
+      expect(cut.reasons).toContain("incomplete_sentence");
+      expect(truncated.reasons).not.toContain("incomplete_sentence");
+      expect(truncated.retryRequested).toBe(false);
+    });
+
+    it("still rejects a dangling speaker label when truncated", () => {
+      const result = evaluateCharacterReply({
+        reply: "Riley replies:",
+        speakerName: "Riley",
+        truncated: true,
+      });
+
+      expect(result.reasons).toContain("incomplete_sentence");
+      expect(result.fatal).toBe(true);
+    });
   });
 });
