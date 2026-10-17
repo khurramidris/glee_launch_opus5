@@ -21,7 +21,7 @@ const reportPath = resolve(
   process.env.GLEE_MODEL_EVAL_REPORT ??
     ".artifacts/evals/shipped-model-latest.json",
 );
-const model = "ternary-bonsai-2-4b-q2_0";
+const model = "ternary-bonsai-2-4b-pq2_0";
 const apiKey = process.env.GLEE_MODEL_EVAL_API_KEY?.trim() ?? "";
 const timestamp = "2000-01-01T00:00:00.000Z";
 
@@ -321,6 +321,15 @@ describe.skipIf(!endpoint)("shipped model response evaluation", () => {
           usage: initial.usage,
           mechanicalPass,
         });
+        if (process.env.GITHUB_ACTIONS) {
+          const summary = [
+            `pass=${mechanicalPass} accepted=${evaluation.accepted} repaired=${evaluation.repaired} score=${evaluation.qualityScore} ${Date.now() - startedAt}ms`,
+            `reasons: ${evaluation.reasons.join("; ") || "none"}`,
+            `raw: ${JSON.stringify(initial.content.slice(0, 400))}`,
+            `final: ${JSON.stringify(evaluation.finalReply.slice(0, 400))}`,
+          ].join("%0A");
+          console.log(`::notice title=eval ${evalCase.id}::${summary}`);
+        }
 
         expect(initial.content.trim()).not.toBe("");
         expect(forbiddenLeak).toBe(false);

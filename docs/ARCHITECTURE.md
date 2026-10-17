@@ -17,7 +17,7 @@ React UI ── Tauri commands ──> Rust backend ──> SQLite (+ sqlite-vec
 The installer contains only the app. `src-tauri/resources/manifest.json` is
 compiled into the binary and pins every AI file with a size and SHA-256 hash:
 
-- the chat model (Ternary Bonsai 2 4B, Q2_0 GGUF),
+- the chat model (Ternary Bonsai 2 4B, PQ2_0 GGUF, PrismML's packing with fast CPU, Metal, and Vulkan kernels),
 - the embedding model (BGE Small EN v1.5),
 - one llama.cpp archive per platform (Windows CPU and Vulkan, macOS Apple
   Silicon (Metal) and Intel, Linux CPU for development).

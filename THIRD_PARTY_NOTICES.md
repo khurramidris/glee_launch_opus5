@@ -6,7 +6,7 @@ licenses. License texts are included with the app under `legal/third-party/`.
 
 | Component | Used for | License | Source |
 | --- | --- | --- | --- |
-| Ternary Bonsai 2 4B (Q2_0 GGUF) by PrismML, based on Qwen3.5-4B | Chat model, downloaded on first run | Apache-2.0 | <https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf> |
+| Ternary Bonsai 2 4B (PQ2_0 GGUF) by PrismML, based on Qwen3.5-4B | Chat model, downloaded on first run | Apache-2.0 | <https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf> |
 | BGE Small EN v1.5 (GGUF conversion by CompendiumLabs) | Memory search embeddings, downloaded on first run | MIT | <https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf> |
 | llama.cpp, PrismML fork (`prism-b10777-e3de715`) | Local inference engine, downloaded on first run | MIT | <https://github.com/PrismML-Eng/llama.cpp> |
 | LLVM OpenMP runtime (`libomp140`, Windows engine only) | Parallel CPU inference | Apache-2.0 WITH LLVM-exception | <https://github.com/llvm/llvm-project> |

@@ -56,7 +56,7 @@ against a SHA-256 fingerprint built into the app. See [PRIVACY.md](PRIVACY.md).
 ## The AI inside
 
 - Chat model: [Ternary Bonsai 2 4B](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf)
-  by PrismML, a 1.2 GB ternary model based on Qwen3.5-4B (Apache-2.0).
+  by PrismML, a 1.1 GB ternary model based on Qwen3.5-4B (Apache-2.0).
 - Engine: [PrismML's llama.cpp](https://github.com/PrismML-Eng/llama.cpp),
   with Metal on Apple Silicon, Vulkan on capable Windows graphics cards, and
   optimized CPU code everywhere else.

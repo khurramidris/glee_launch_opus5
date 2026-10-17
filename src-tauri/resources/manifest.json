@@ -3,23 +3,10 @@
   "mirrors": [],
   "models": [
     {
-      "id": "ternary-bonsai-2-4b-q2_0",
-      "role": "chat",
-      "displayName": "Ternary Bonsai 2 4B",
-      "license": "Apache-2.0",
-      "fileName": "Ternary-Bonsai-2-4B-Q2_0.gguf",
-      "sizeBytes": 1212103520,
-      "sha256": "64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4",
-      "url": "https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/8d6557168168f91ea6697a4a49ed2ef622b53adb/Ternary-Bonsai-2-4B-Q2_0.gguf"
-    },
-    {
       "id": "ternary-bonsai-2-4b-pq2_0",
       "role": "chat",
       "displayName": "Ternary Bonsai 2 4B",
       "license": "Apache-2.0",
-      "platforms": [
-        "macos-arm64"
-      ],
       "fileName": "Ternary-Bonsai-2-4B-PQ2_0.gguf",
       "sizeBytes": 1146465120,
       "sha256": "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409",

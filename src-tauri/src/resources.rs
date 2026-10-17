@@ -1949,10 +1949,22 @@ mod tests {
 
     #[test]
     fn platforms_can_use_a_different_packing_of_the_chat_model() {
-        let manifest = ResourceManifest::parse(BUNDLED_MANIFEST).unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(BUNDLED_MANIFEST).unwrap();
+        let models = json["models"].as_array_mut().unwrap();
+        let mut mac_only = models
+            .iter()
+            .find(|model| model["role"] == "chat")
+            .unwrap()
+            .clone();
+        mac_only["id"] = "mac-only-chat".into();
+        mac_only["sha256"] = SHA_A.into();
+        mac_only["platforms"] = serde_json::json!(["macos-arm64"]);
+        models.push(mac_only);
+        let manifest = ResourceManifest::parse(&json.to_string()).unwrap();
+
         let mac = manifest.model_for(ModelRole::Chat, "macos-arm64");
         let windows = manifest.model_for(ModelRole::Chat, "windows-x64");
-        assert!(mac.platforms.contains(&"macos-arm64".to_string()));
+        assert_eq!(mac.id, "mac-only-chat");
         assert!(windows.platforms.is_empty());
         assert_ne!(mac.source.sha256, windows.source.sha256);
         assert_eq!(
